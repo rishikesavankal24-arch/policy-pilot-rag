@@ -1,0 +1,62 @@
+node_modules/
+.next/
+out/
+build/
+dist/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Environments
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDEs and OS
+.DS_Store
+.vscode/
+.idea/
+
+# Database
+infrastructure/db-data/
+postgres-data/
+pgdata/
+
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Backend uploaded/local files
+backend/storage/
+
+# Python test/cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Logs
+*.log
+logs/
+
+# Coverage
+.coverage
+coverage/
+htmlcov/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.tsbuildinfo
