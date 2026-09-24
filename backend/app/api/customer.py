@@ -14,6 +14,8 @@ from app.db.models import (
     User, Role, Application, Document, DocumentStatus, Notification, ApplicationStatus,
     InformationRequestStatus, AdditionalInformationRequest, ApplicationAuditEvent
 )
+from app.services.document_validator import DocumentValidator
+from app.services.document_processor import DocumentProcessor
 
 router = APIRouter()
 
@@ -370,9 +372,14 @@ def respond_to_information_request(
             detail=f"Information request is already in '{info_req.status}' state."
         )
 
+    doc_type = info_req.requested_document_type or "ADDITIONAL_DOCUMENT"
+
+    # Centralized validation of document type, extension, size, magic bytes, MIME, and SHA-256
+    validation = DocumentValidator.validate(file, doc_type)
+
     # Save document file using real storage
     doc_id = uuid.uuid4()
-    safe_filename = sanitize_filename(file.filename or "requested_document.pdf")
+    safe_filename = sanitize_filename(validation.original_filename)
     doc_dir = (STORAGE_DIR / str(doc_id)).resolve()
     doc_dir.mkdir(parents=True, exist_ok=True)
     target_path = (doc_dir / safe_filename).resolve()
@@ -382,17 +389,31 @@ def respond_to_information_request(
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid storage path")
 
-    with open(target_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    # Rewind upload file stream before writing
+    file.file.seek(0)
 
-    doc_type = info_req.requested_document_type or "ADDITIONAL_DOCUMENT"
+    try:
+        with open(target_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        proc_metadata = DocumentProcessor.process_document(target_path, validation.mime_type)
+    except Exception:
+        if doc_dir.exists():
+            shutil.rmtree(doc_dir, ignore_errors=True)
+        raise
+
     new_doc = Document(
         id=doc_id,
         user_id=current_user.id,
         application_id=app.id,
-        document_type=doc_type,
+        document_type=validation.document_type,
         file_url=f"documents/{doc_id}/{safe_filename}",
-        status=DocumentStatus.UPLOADED.value
+        status=DocumentStatus.UPLOADED.value,
+        original_filename=validation.original_filename,
+        file_size_bytes=validation.file_size_bytes,
+        mime_type=validation.mime_type,
+        file_hash=validation.file_hash,
+        page_count=proc_metadata.get("page_count")
     )
     db.add(new_doc)
 

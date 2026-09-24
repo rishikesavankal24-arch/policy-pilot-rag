@@ -224,7 +224,20 @@ export const hi: TranslationDictionary = {
     cancel: "रद्द करें",
     uploadAndSave: "अपलोड और सहेजें",
     uploading: "अपलोड हो रहा है...",
-    failedUpload: "दस्तावेज़ अपलोड करने में विफल।"
+    failedUpload: "दस्तावेज़ अपलोड करने में विफल।",
+    replaceDocument: "दस्तावेज़ बदलें",
+    replaceModalTitle: "त्रुटिपूर्ण दस्तावेज़ बदलें",
+    uploadReplacement: "प्रतिस्थापन दस्तावेज़ अपलोड करें",
+    uploadingReplacement: "प्रतिस्थापन अपलोड हो रहा है...",
+    replacesLabel: "बदला जाने वाला दस्तावेज़",
+    reasonLabel: "त्रुटि का कारण",
+    replacePrompt: "प्रतिस्थापन फ़ाइल चुनें (PDF, JPEG, या PNG, अधिकतम 10 MB)।",
+    viewDoc: "देखें",
+    fileSize: "आकार",
+    pages: "पृष्ठ",
+    page: "पृष्ठ",
+    na: "लागू नहीं",
+    reuploadRequired: "पुनः अपलोड आवश्यक"
   },
   notificationsPage: {
     title: "सूचनाएं",

@@ -224,7 +224,20 @@ export const kn: TranslationDictionary = {
     cancel: "ರದ್ದುಮಾಡಿ",
     uploadAndSave: "ಅಪ್‌ಲೋಡ್ ಮಾಡಿ ಮತ್ತು ಉಳಿಸಿ",
     uploading: "ಅಪ್‌ಲೋಡ್ ಆಗುತ್ತಿದೆ...",
-    failedUpload: "ದಾಖಲೆ ಅಪ್‌ಲೋಡ್ ಮಾಡುವಲ್ಲಿ ವಿಫಲವಾಗಿದೆ."
+    failedUpload: "ದಾಖಲೆ ಅಪ್‌ಲೋಡ್ ಮಾಡುವಲ್ಲಿ ವಿಫಲವಾಗಿದೆ.",
+    replaceDocument: "ದಾಖಲೆಯನ್ನು ಬದಲಾಯಿಸಿ",
+    replaceModalTitle: "ದೋಷಪೂರಿತ ದಾಖಲೆಯನ್ನು ಬದಲಾಯಿಸಿ",
+    uploadReplacement: "ಬದಲಿ ದಾಖಲೆಯನ್ನು ಅಪ್‌ಲೋಡ್ ಮಾಡಿ",
+    uploadingReplacement: "ಬದಲಿ ದಾಖಲೆ ಅಪ್‌ಲೋಡ್ ಆಗುತ್ತಿದೆ...",
+    replacesLabel: "ಬದಲಾಯಿಸಲಾಗುತ್ತಿರುವ ದಾಖಲೆ",
+    reasonLabel: "ದೋಷದ ಕಾರಣ",
+    replacePrompt: "ಬದಲಿ ಫೈಲ್ ಆಯ್ಕೆಮಾಡಿ (PDF, JPEG, ಅಥವಾ PNG, ಗರಿಷ್ಠ 10 MB).",
+    viewDoc: "ವೀಕ್ಷಿಸಿ",
+    fileSize: "ಗಾತ್ರ",
+    pages: "ಪುಟಗಳು",
+    page: "ಪುಟ",
+    na: "ಅನ್ವಯಿಸುವುದಿಲ್ಲ",
+    reuploadRequired: "ಮರು ಅಪ್‌ಲೋಡ್ ಅಗತ್ಯವಿದೆ"
   },
   notificationsPage: {
     title: "ಅಧಿಸೂಚನೆಗಳು",

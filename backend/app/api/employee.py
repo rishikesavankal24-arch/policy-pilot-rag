@@ -81,6 +81,11 @@ class DocumentItem(BaseModel):
     review_notes: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    original_filename: Optional[str] = None
+    file_size_bytes: Optional[int] = None
+    mime_type: Optional[str] = None
+    file_hash: Optional[str] = None
+    page_count: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -658,7 +663,12 @@ def get_employee_application_detail(
             "reviewed_at": doc.reviewed_at.isoformat() if doc.reviewed_at else None,
             "review_notes": display_notes,
             "created_at": doc.created_at.isoformat() if doc.created_at else None,
-            "updated_at": doc.updated_at.isoformat() if doc.updated_at else None
+            "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
+            "original_filename": doc.original_filename,
+            "file_size_bytes": doc.file_size_bytes,
+            "mime_type": doc.mime_type,
+            "file_hash": doc.file_hash,
+            "page_count": doc.page_count
         })
         
     applicant_data = {
@@ -1285,7 +1295,12 @@ def get_employee_documents(
             "applicant_name": user.full_name or user.email,
             "applicant_email": user.email,
             "loan_type": app.loan_type,
-            "application_status": app.status
+            "application_status": app.status,
+            "original_filename": doc.original_filename,
+            "file_size_bytes": doc.file_size_bytes,
+            "mime_type": doc.mime_type,
+            "file_hash": doc.file_hash,
+            "page_count": doc.page_count
         })
         
     return result

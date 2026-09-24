@@ -75,6 +75,11 @@ class DocumentItemResponse(BaseModel):
     reviewed_at: Optional[datetime] = None
     review_notes: Optional[str] = None
     created_at: Optional[datetime] = None
+    original_filename: Optional[str] = None
+    file_size_bytes: Optional[int] = None
+    mime_type: Optional[str] = None
+    file_hash: Optional[str] = None
+    page_count: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -140,7 +145,12 @@ def get_application(app_id: UUID, current_user: User = Depends(get_current_user)
             status=d.status,
             reviewed_at=d.reviewed_at,
             review_notes=("Reason not recorded" if (d.review_notes and d.review_notes.strip().lower() in ["nil", "none"]) else d.review_notes),
-            created_at=d.created_at
+            created_at=d.created_at,
+            original_filename=d.original_filename,
+            file_size_bytes=d.file_size_bytes,
+            mime_type=d.mime_type,
+            file_hash=d.file_hash,
+            page_count=d.page_count
         )
         for d in docs
     ]

@@ -224,7 +224,20 @@ export const ta: TranslationDictionary = {
     cancel: "ரத்து செய்",
     uploadAndSave: "பதிவேற்றி சேமிக்கவும்",
     uploading: "பதிவேற்றப்படுகிறது...",
-    failedUpload: "ஆவணத்தைப் பதிவேற்றுவதில் தோல்வி."
+    failedUpload: "ஆவணத்தைப் பதிவேற்றுவதில் தோல்வி.",
+    replaceDocument: "ஆவணத்தை மாற்றவும்",
+    replaceModalTitle: "குறைபாடுள்ள ஆவணத்தை மாற்றவும்",
+    uploadReplacement: "மாற்று ஆவணத்தைப் பதிவேற்றவும்",
+    uploadingReplacement: "மாற்று ஆவணம் பதிவேற்றப்படுகிறது...",
+    replacesLabel: "மாற்றப்படும் ஆவணம்",
+    reasonLabel: "குறைபாட்டின் காரணம்",
+    replacePrompt: "மாற்று கோப்பைத் தேர்ந்தெடுக்கவும் (PDF, JPEG, அல்லது PNG, அதிகபட்சம் 10 MB).",
+    viewDoc: "பார்வை",
+    fileSize: "அளவு",
+    pages: "பக்கங்கள்",
+    page: "பக்கம்",
+    na: "பொருந்தாது",
+    reuploadRequired: "மறுபதிவேற்றம் தேவை"
   },
   notificationsPage: {
     title: "அறிவிப்புகள்",

@@ -25,6 +25,8 @@ from app.db.models import (
     EmployeeRequestStatus,
     ApplicationAuditEvent
 )
+from app.services.document_validator import DocumentValidator
+from app.services.document_processor import DocumentProcessor
 
 router = APIRouter()
 
@@ -100,6 +102,11 @@ class DocumentResponse(BaseModel):
     file_url: str
     status: str
     created_at: Optional[datetime] = None
+    original_filename: Optional[str] = None
+    file_size_bytes: Optional[int] = None
+    mime_type: Optional[str] = None
+    file_hash: Optional[str] = None
+    page_count: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -119,7 +126,12 @@ def get_documents(current_user: User = Depends(get_current_user), db: Session = 
             document_type=d.document_type,
             file_url=f"/api/documents/{d.id}/content",
             status=d.status,
-            created_at=d.created_at
+            created_at=d.created_at,
+            original_filename=d.original_filename,
+            file_size_bytes=d.file_size_bytes,
+            mime_type=d.mime_type,
+            file_hash=d.file_hash,
+            page_count=d.page_count
         )
         for d in docs
     ]
@@ -141,6 +153,9 @@ def upload_document(
         app = db.query(Application).filter(Application.id == application_id, Application.user_id == current_user.id).first()
         if not app:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found or unauthorized")
+
+    # 1. Centralized validation of document type, extension, size, magic bytes, MIME, and SHA-256
+    validation = DocumentValidator.validate(file, document_type)
 
     # Check if this upload replaces an existing deficient document
     target_doc = None
@@ -171,26 +186,16 @@ def upload_document(
         target_doc = db.query(Document).filter(
             Document.application_id == application_id,
             Document.user_id == current_user.id,
-            Document.document_type == document_type,
+            Document.document_type == validation.document_type,
             Document.status == DocumentStatus.REQUIRES_REUPLOAD.value
         ).first()
 
     # Use existing document's ID if replacing, otherwise allocate new UUID
     doc_id = target_doc.id if target_doc else uuid.uuid4()
-    safe_filename = sanitize_filename(file.filename or "uploaded_document.pdf")
+    safe_filename = sanitize_filename(validation.original_filename)
     
     doc_dir = (STORAGE_DIR / str(doc_id)).resolve()
     doc_dir.mkdir(parents=True, exist_ok=True)
-
-    # When replacing an existing document, clean up previous physical files in its folder
-    if target_doc and doc_dir.exists():
-        for existing_file in doc_dir.iterdir():
-            if existing_file.is_file():
-                try:
-                    existing_file.unlink()
-                except OSError:
-                    pass
-
     target_path = (doc_dir / safe_filename).resolve()
     
     # Ensure path cannot escape STORAGE_DIR
@@ -202,16 +207,52 @@ def upload_document(
     # Rewind upload file stream before writing
     file.file.seek(0)
 
-    # Persist real file bytes to storage
-    with open(target_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    # Persist real file bytes to storage and extract processing metadata
+    try:
+        with open(target_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        # 2. Extract Document Processing Metadata (e.g. PDF page_count)
+        proc_metadata = DocumentProcessor.process_document(target_path, validation.mime_type)
+    except Exception:
+        # If writing or processing failed, clean up newly written file if replacement,
+        # or clean up newly created directory if new document.
+        if target_doc:
+            if target_path.exists():
+                try:
+                    target_path.unlink()
+                except OSError:
+                    pass
+        else:
+            if doc_dir.exists():
+                try:
+                    shutil.rmtree(doc_dir, ignore_errors=True)
+                except OSError:
+                    pass
+        raise
+
+    # Replacement Atomicity:
+    # Only after writing the new file and metadata extraction succeeding, clean up previous/older files in this folder
+    if target_doc and doc_dir.exists():
+        for existing_file in doc_dir.iterdir():
+            if existing_file.is_file() and existing_file.resolve() != target_path:
+                try:
+                    existing_file.unlink()
+                except OSError:
+                    pass
 
     # Relative storage key stored in database
     relative_storage_key = f"documents/{doc_id}/{safe_filename}"
+    page_count = proc_metadata.get("page_count")
 
     if target_doc:
         target_doc.file_url = relative_storage_key
         target_doc.status = DocumentStatus.UPLOADED.value
+        target_doc.original_filename = validation.original_filename
+        target_doc.file_size_bytes = validation.file_size_bytes
+        target_doc.mime_type = validation.mime_type
+        target_doc.file_hash = validation.file_hash
+        target_doc.page_count = page_count
         target_doc.review_notes = None
         target_doc.reviewed_at = None
         target_doc.reviewed_by = None
@@ -233,9 +274,14 @@ def upload_document(
             id=doc_id,
             user_id=current_user.id,
             application_id=application_id,
-            document_type=document_type,
+            document_type=validation.document_type,
             file_url=relative_storage_key,
-            status=DocumentStatus.UPLOADED.value
+            status=DocumentStatus.UPLOADED.value,
+            original_filename=validation.original_filename,
+            file_size_bytes=validation.file_size_bytes,
+            mime_type=validation.mime_type,
+            file_hash=validation.file_hash,
+            page_count=page_count
         )
         db.add(doc_record)
 
@@ -245,7 +291,7 @@ def upload_document(
             from app.api.employee import invalidate_review_readiness
             invalidate_review_readiness(
                 app_to_check, db, current_user.id,
-                f"New document '{document_type}' uploaded by applicant."
+                f"New document '{validation.document_type}' uploaded by applicant."
             )
 
     db.commit()
@@ -257,7 +303,12 @@ def upload_document(
         document_type=doc_record.document_type,
         file_url=f"/api/documents/{doc_record.id}/content",
         status=doc_record.status,
-        created_at=doc_record.created_at
+        created_at=doc_record.created_at,
+        original_filename=doc_record.original_filename,
+        file_size_bytes=doc_record.file_size_bytes,
+        mime_type=doc_record.mime_type,
+        file_hash=doc_record.file_hash,
+        page_count=doc_record.page_count
     )
 
 

@@ -224,7 +224,20 @@ export const te: TranslationDictionary = {
     cancel: "రద్దు చేయి",
     uploadAndSave: "అప్‌లోడ్ చేసి సేవ్ చేయండి",
     uploading: "అప్‌లోడ్ అవుతోంది...",
-    failedUpload: "పత్రాన్ని అప్‌లోడ్ చేయడంలో విఫలమైంది."
+    failedUpload: "పత్రాన్ని అప్‌లోడ్ చేయడంలో విఫలమైంది.",
+    replaceDocument: "పత్రాన్ని భర్తీ చేయండి",
+    replaceModalTitle: "లోపభూయిష్ట పత్రాన్ని భర్తీ చేయండి",
+    uploadReplacement: "ప్రత్యామ్నాయ పత్రాన్ని అప్‌లోడ్ చేయండి",
+    uploadingReplacement: "ప్రత్యామ్నాయ పత్రం అప్‌లోడ్ అవుతోంది...",
+    replacesLabel: "భర్తీ చేయబడుతున్న పత్రం",
+    reasonLabel: "లోపం కారణం",
+    replacePrompt: "ప్రత్యామ్నాయ ఫైల్‌ను ఎంచుకోండి (PDF, JPEG, లేదా PNG, గరిష్టంగా 10 MB).",
+    viewDoc: "చూడండి",
+    fileSize: "పరిమాణం",
+    pages: "పేజీలు",
+    page: "పేజీ",
+    na: "వర్తించదు",
+    reuploadRequired: "తిరిగి అప్‌లోడ్ అవసరం"
   },
   notificationsPage: {
     title: "నోటిఫికేషన్‌లు",

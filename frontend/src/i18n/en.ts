@@ -224,7 +224,20 @@ export const en: TranslationDictionary = {
     cancel: "Cancel",
     uploadAndSave: "Upload and Save",
     uploading: "Uploading...",
-    failedUpload: "Failed to upload document."
+    failedUpload: "Failed to upload document.",
+    replaceDocument: "Replace Document",
+    replaceModalTitle: "Replace Deficient Document",
+    uploadReplacement: "Upload Replacement",
+    uploadingReplacement: "Uploading Replacement...",
+    replacesLabel: "Document being replaced",
+    reasonLabel: "Deficiency Reason",
+    replacePrompt: "Select a replacement file (PDF, JPEG, or PNG up to 10 MB).",
+    viewDoc: "View",
+    fileSize: "Size",
+    pages: "pages",
+    page: "page",
+    na: "N/A",
+    reuploadRequired: "Re-upload Required"
   },
   notificationsPage: {
     title: "Notifications",

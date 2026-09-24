@@ -17,6 +17,12 @@ import {
   Clock,
   AlertTriangle
 } from "lucide-react";
+import { 
+  formatFileSize, 
+  getMimeBadge, 
+  formatPageCount, 
+  sanitizeErrorMessage 
+} from "@/lib/documentUtils";
 
 interface DocumentQueueItem {
   id: string;
@@ -29,6 +35,11 @@ interface DocumentQueueItem {
   applicant_email: string;
   loan_type: string;
   application_status: string;
+  original_filename?: string | null;
+  file_size_bytes?: number | null;
+  mime_type?: string | null;
+  file_hash?: string | null;
+  page_count?: number | null;
 }
 
 export default function EmployeeDocumentsPage() {
@@ -63,7 +74,7 @@ export default function EmployeeDocumentsPage() {
       const data = await res.json();
       setDocuments(data || []);
     } catch (err: any) {
-      setError(err.message || "Failed to load document records.");
+      setError(sanitizeErrorMessage(err.message || "Failed to load document records."));
     } finally {
       setLoading(false);
     }
@@ -178,12 +189,35 @@ export default function EmployeeDocumentsPage() {
                     </td>
                   </tr>
                 ) : (
-                  documents.map((doc) => (
+                  documents.map((doc) => {
+                    const mimeBadge = getMimeBadge(doc.mime_type, doc.original_filename);
+                    const pageText = formatPageCount(doc.page_count, doc.mime_type, doc.original_filename);
+                    const displayName = doc.original_filename || doc.file_url.split('/').pop() || "Document";
+
+                    return (
                     <tr key={doc.id} className="hover:bg-slate-800/40 transition-colors">
                       <td className="px-4 py-3.5">
-                        <span className="font-semibold text-slate-200 block">
-                          {doc.document_type.replace(/_/g, " ")}
-                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-semibold text-slate-200">
+                            {doc.document_type.replace(/_/g, " ")}
+                          </span>
+                          <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-700/80 text-slate-200">
+                            {mimeBadge}
+                          </span>
+                          {doc.file_size_bytes != null && (
+                            <span className="text-[10px] font-mono text-slate-400">
+                              ({formatFileSize(doc.file_size_bytes)})
+                            </span>
+                          )}
+                          {pageText && (
+                            <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-blue-950/80 text-blue-300 border border-blue-800/60">
+                              {pageText}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-slate-400 truncate max-w-[200px]" title={displayName}>
+                          {displayName}
+                        </div>
                         <span className="text-[10px] text-slate-500 font-mono">
                           ID: {doc.id.slice(0, 8)}...
                         </span>
@@ -223,7 +257,8 @@ export default function EmployeeDocumentsPage() {
                         </div>
                       </td>
                     </tr>
-                  ))
+                  );
+                  })
                 )}
               </tbody>
             </table>

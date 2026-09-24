@@ -182,6 +182,13 @@ class Document(Base):
     reviewed_at = Column(DateTime(timezone=True), nullable=True)
     review_notes = Column(String, nullable=True)
     
+    # M07 Document Metadata
+    original_filename = Column(String, nullable=True)
+    file_size_bytes = Column(Integer, nullable=True)
+    mime_type = Column(String, nullable=True)
+    file_hash = Column(String, nullable=True)
+    page_count = Column(Integer, nullable=True)
+    
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     

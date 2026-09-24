@@ -21,6 +21,7 @@ import uuid
 import io
 from pathlib import Path
 from app.db.session import SessionLocal
+from tests.pdf_fixtures import make_test_pdf_bytes
 
 @pytest.fixture
 def db_session():
@@ -93,7 +94,8 @@ def test_customer_can_upload_and_serve_real_pdf(db_session):
     client = TestClient(app, cookies={"session_id": token})
 
     # Real PDF bytes
-    pdf_bytes = b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Count 0>>endobj\nxref\n0 3\n0000000000 65535 f\n0000000009 00000 n\n0000000052 00000 n\ntrailer<</Size 3/Root 1 0 R>>\nstartxref\n99\n%%EOF\n"
+    from tests.pdf_fixtures import make_test_pdf_bytes
+    pdf_bytes = make_test_pdf_bytes(1)
     
     upload_res = client.post(
         "/api/documents/",
@@ -129,7 +131,7 @@ def test_customer_cannot_access_another_customer_document(db_session):
     client_b = TestClient(app, cookies={"session_id": token_b})
 
     # Customer A uploads document
-    pdf_bytes = b"%PDF-1.4 Sample Customer A Document %%EOF"
+    pdf_bytes = make_test_pdf_bytes(1)
     upload_res = client_a.post(
         "/api/documents/",
         data={"document_type": "INCOME_PROOF"},
@@ -164,7 +166,7 @@ def test_authorized_employee_can_access_application_document(db_session):
     app_id = app_res.json()["id"]
 
     # Customer uploads document attached to application
-    doc_bytes = b"%PDF-1.4 Application Attached Certificate %%EOF"
+    doc_bytes = make_test_pdf_bytes(1)
     upload_res = cust_client.post(
         "/api/documents/",
         data={"document_type": "REGISTRATION_CERTIFICATE", "application_id": app_id},
@@ -400,8 +402,8 @@ def test_document_replacement_serves_new_content(db_session):
     db_session.commit()
 
     # Distinct byte payloads
-    pdf_a_bytes = b"%PDF-1.4\nORIGINAL DOCUMENT -- TEST A\n%%EOF"
-    pdf_b_bytes = b"%PDF-1.4\nREPLACEMENT DOCUMENT -- TEST B\n%%EOF"
+    pdf_a_bytes = make_test_pdf_bytes(1)
+    pdf_b_bytes = make_test_pdf_bytes(2)
 
     # 1. Customer uploads PDF A
     upload_res = cust_client.post(
@@ -534,7 +536,7 @@ def test_invalid_document_replacement_attempts(db_session):
     up_res = c1_client.post(
         "/api/documents/",
         data={"document_type": "ID_PROOF", "application_id": str(app1.id)},
-        files={"file": ("aadhaar.pdf", io.BytesIO(b"%PDF-1.4\noriginal\n%%EOF"), "application/pdf")}
+        files={"file": ("aadhaar.pdf", io.BytesIO(make_test_pdf_bytes(1)), "application/pdf")}
     )
     assert up_res.status_code == 200
     doc1_id = up_res.json()["id"]
@@ -546,7 +548,7 @@ def test_invalid_document_replacement_attempts(db_session):
     res_404 = c1_client.post(
         "/api/documents/",
         data={"document_type": "ID_PROOF", "application_id": str(app1.id), "replaces_document_id": non_existent_id},
-        files={"file": ("rep.pdf", io.BytesIO(b"%PDF-1.4\nrep\n%%EOF"), "application/pdf")}
+        files={"file": ("rep.pdf", io.BytesIO(make_test_pdf_bytes(1)), "application/pdf")}
     )
     assert res_404.status_code == 404
     assert "not found" in res_404.json()["detail"].lower()
@@ -555,7 +557,7 @@ def test_invalid_document_replacement_attempts(db_session):
     res_not_deficient = c1_client.post(
         "/api/documents/",
         data={"document_type": "ID_PROOF", "application_id": str(app1.id), "replaces_document_id": doc1_id},
-        files={"file": ("rep.pdf", io.BytesIO(b"%PDF-1.4\nrep\n%%EOF"), "application/pdf")}
+        files={"file": ("rep.pdf", io.BytesIO(make_test_pdf_bytes(1)), "application/pdf")}
     )
     assert res_not_deficient.status_code == 400
     assert "only documents requiring re-upload" in res_not_deficient.json()["detail"].lower()
@@ -584,7 +586,7 @@ def test_invalid_document_replacement_attempts(db_session):
     res_unauth = c2_client.post(
         "/api/documents/",
         data={"document_type": "ID_PROOF", "application_id": str(app_c2.id), "replaces_document_id": doc1_id},
-        files={"file": ("rep.pdf", io.BytesIO(b"%PDF-1.4\nrep\n%%EOF"), "application/pdf")}
+        files={"file": ("rep.pdf", io.BytesIO(make_test_pdf_bytes(1)), "application/pdf")}
     )
     assert res_unauth.status_code == 403
     assert "cannot replace a document belonging to another user" in res_unauth.json()["detail"].lower()
@@ -593,7 +595,7 @@ def test_invalid_document_replacement_attempts(db_session):
     res_wrong_app = c1_client.post(
         "/api/documents/",
         data={"document_type": "ID_PROOF", "application_id": str(app2.id), "replaces_document_id": doc1_id},
-        files={"file": ("rep.pdf", io.BytesIO(b"%PDF-1.4\nrep\n%%EOF"), "application/pdf")}
+        files={"file": ("rep.pdf", io.BytesIO(make_test_pdf_bytes(1)), "application/pdf")}
     )
     assert res_wrong_app.status_code == 400
     assert "does not belong to the specified application" in res_wrong_app.json()["detail"].lower()

@@ -24,6 +24,12 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useLanguage } from "@/i18n/LanguageContext";
+import { 
+  formatFileSize, 
+  getMimeBadge, 
+  formatPageCount, 
+  sanitizeErrorMessage 
+} from "@/lib/documentUtils";
 
 interface Application {
   id: string;
@@ -49,6 +55,11 @@ interface ApplicationDocument {
   reviewed_at?: string | null;
   review_notes?: string | null;
   created_at: string;
+  original_filename?: string | null;
+  file_size_bytes?: number | null;
+  mime_type?: string | null;
+  file_hash?: string | null;
+  page_count?: number | null;
 }
 
 interface InformationRequestItem {
@@ -297,7 +308,7 @@ export default function ApplicationDetailsPage() {
         await fetchApplication();
       } else {
         const errData = await res.json().catch(() => ({}));
-        setDocUploadError(errData.detail || t("documents.uploadError"));
+        setDocUploadError(sanitizeErrorMessage(errData.detail || errData.message || t("documents.uploadError")));
       }
     } catch {
       setDocUploadError(t("newApplication.networkError"));
@@ -334,7 +345,7 @@ export default function ApplicationDetailsPage() {
         await fetchApplication();
       } else {
         const errData = await res.json().catch(() => ({}));
-        setReplacementError(errData.detail || "Failed to upload replacement document.");
+        setReplacementError(sanitizeErrorMessage(errData.detail || errData.message || "Failed to upload replacement document."));
       }
     } catch {
       setReplacementError("Network error while uploading replacement document.");
@@ -390,7 +401,7 @@ export default function ApplicationDetailsPage() {
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.detail || "Failed to submit response.");
+        throw new Error(sanitizeErrorMessage(errData.detail || errData.message || "Failed to submit response."));
       }
 
       setRespondingReq(null);
@@ -400,7 +411,7 @@ export default function ApplicationDetailsPage() {
       setTimeout(() => setActionSuccess(null), 5000);
       await fetchApplication();
     } catch (err: any) {
-      setResponseError(err.message || "Failed to submit response.");
+      setResponseError(sanitizeErrorMessage(err.message || "Failed to submit response."));
     } finally {
       setIsSubmittingResponse(false);
     }
@@ -1153,63 +1164,84 @@ export default function ApplicationDetailsPage() {
                   </div>
                 ) : (
                   <ul className="divide-y divide-slate-100">
-                    {documents.map((doc) => (
-                      <li key={doc.id} className="p-4 flex items-center justify-between hover:bg-slate-50/50 transition-colors">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 bg-slate-100 rounded-lg text-slate-600">
-                            <FileText className="h-5 w-5" />
-                          </div>
-                          <div>
-                            <p className="text-sm font-medium text-slate-900">{tDocType(doc.document_type)}</p>
-                            <p className="text-xs text-slate-500 mt-0.5">
-                              {new Date(doc.created_at).toLocaleDateString()}
-                            </p>
-                            {doc.status === 'REQUIRES_REUPLOAD' && doc.review_notes && (
-                              <div className="mt-1 p-2 rounded bg-amber-50 border border-amber-200 text-amber-900 text-xs">
-                                <span className="font-semibold">Re-upload note: </span>{doc.review_notes}
+                    {documents.map((doc) => {
+                      const mimeBadge = getMimeBadge(doc.mime_type, doc.original_filename);
+                      const pageText = formatPageCount(doc.page_count, doc.mime_type, doc.original_filename);
+                      const displayName = doc.original_filename || doc.file_url.split('/').pop() || "Document";
+
+                      return (
+                        <li key={doc.id} className="p-4 flex items-center justify-between hover:bg-slate-50/50 transition-colors">
+                          <div className="flex items-start gap-3">
+                            <div className="p-2 bg-slate-100 rounded-lg text-slate-600 mt-0.5 shrink-0">
+                              <FileText className="h-5 w-5" />
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-sm font-semibold text-slate-900">{tDocType(doc.document_type)}</span>
+                                <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-200/80 text-slate-700">
+                                  {mimeBadge}
+                                </span>
+                                {doc.file_size_bytes != null && (
+                                  <span className="text-[11px] font-mono text-slate-500">
+                                    ({formatFileSize(doc.file_size_bytes)})
+                                  </span>
+                                )}
+                                {pageText && (
+                                  <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-blue-50 text-blue-800 border border-blue-200">
+                                    {pageText}
+                                  </span>
+                                )}
                               </div>
+                              <p className="text-xs text-slate-500 mt-0.5 truncate max-w-sm" title={displayName}>
+                                {displayName} • {new Date(doc.created_at).toLocaleDateString()}
+                              </p>
+                              {doc.status === 'REQUIRES_REUPLOAD' && doc.review_notes && !["nil", "none"].includes(doc.review_notes.trim().toLowerCase()) && (
+                                <div className="mt-1 p-2 rounded bg-amber-50 border border-amber-200 text-amber-900 text-xs">
+                                  <span className="font-semibold">Re-upload note: </span>{doc.review_notes}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-3">
+                            {getDocStatusBadge(doc.status)}
+                            {doc.status === 'REQUIRES_REUPLOAD' && !isDecided && (
+                              <button
+                                onClick={() => {
+                                  setReplacingDoc(doc);
+                                  setReplacementFile(null);
+                                  setReplacementError(null);
+                                }}
+                                className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-bold transition-colors inline-flex items-center gap-1 shadow-sm cursor-pointer"
+                                title="Replace Document"
+                              >
+                                <Upload className="h-3 w-3" />
+                                <span>Replace</span>
+                              </button>
+                            )}
+                            <a
+                              href={`${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/documents/${doc.id}/content`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="p-1 text-slate-500 hover:text-blue-600 transition-colors"
+                              title="View Document"
+                              aria-label="View Document"
+                            >
+                              <ExternalLink className="h-4 w-4" />
+                            </a>
+                            {isDraft && (
+                              <button
+                                onClick={() => handleDeleteDocument(doc.id)}
+                                className="p-1 text-slate-400 hover:text-rose-600 transition-colors"
+                                title={t("common.delete")}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
                             )}
                           </div>
-                        </div>
-
-                        <div className="flex items-center gap-3">
-                          {getDocStatusBadge(doc.status)}
-                          {doc.status === 'REQUIRES_REUPLOAD' && !isDecided && (
-                            <button
-                              onClick={() => {
-                                setReplacingDoc(doc);
-                                setReplacementFile(null);
-                                setReplacementError(null);
-                              }}
-                              className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-bold transition-colors inline-flex items-center gap-1 shadow-sm cursor-pointer"
-                              title="Replace Document"
-                            >
-                              <Upload className="h-3 w-3" />
-                              <span>Replace</span>
-                            </button>
-                          )}
-                          <a
-                            href={`${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/documents/${doc.id}/content`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="p-1 text-slate-500 hover:text-blue-600 transition-colors"
-                            title="View Document"
-                            aria-label="View Document"
-                          >
-                            <ExternalLink className="h-4 w-4" />
-                          </a>
-                          {isDraft && (
-                            <button
-                              onClick={() => handleDeleteDocument(doc.id)}
-                              className="p-1 text-slate-400 hover:text-rose-600 transition-colors"
-                              title={t("common.delete")}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </button>
-                          )}
-                        </div>
-                      </li>
-                    ))}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </div>
@@ -1438,13 +1470,19 @@ export default function ApplicationDetailsPage() {
 
             <div className="p-3 bg-amber-50 rounded-lg border border-amber-200 text-xs text-amber-950 space-y-1">
               <p className="font-semibold">
-                Document: {replacingDoc.document_type.replace(/_/g, " ").toUpperCase()}
+                Document: {tDocType(replacingDoc.document_type)}
+              </p>
+              <p className="text-[11px] font-mono text-amber-800 truncate" title={replacingDoc.original_filename || replacingDoc.file_url}>
+                Current file: {replacingDoc.original_filename || replacingDoc.file_url.split('/').pop()}
               </p>
               <p className="text-amber-900">
                 <span className="font-semibold">Underwriter reason: </span>
                 {replacingDoc.review_notes && !["nil", "none"].includes(replacingDoc.review_notes.trim().toLowerCase()) 
                   ? replacingDoc.review_notes 
                   : "Correction or clearer copy required"}
+              </p>
+              <p className="text-[10px] text-amber-700 mt-1">
+                Supported formats: PDF, JPEG, PNG (Max 10 MB)
               </p>
             </div>
 

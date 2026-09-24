@@ -13,6 +13,7 @@ import uuid
 import io
 import shutil
 from app.db.session import SessionLocal
+from tests.pdf_fixtures import make_test_pdf_bytes
 
 client = TestClient(app)
 
@@ -110,7 +111,8 @@ def test_full_document_review_and_info_request_lifecycle(db_session):
     app_id = create_res.json()["id"]
 
     # 3. Customer A uploads 2 documents
-    pdf_bytes_1 = b"%PDF-1.4 test certificate alpha 1"
+    from tests.pdf_fixtures import make_test_pdf_bytes
+    pdf_bytes_1 = make_test_pdf_bytes(1)
     upload_res_1 = client.post(
         "/api/documents/",
         data={"document_type": "INCORPORATION_CERTIFICATE", "application_id": str(app_id)},
@@ -120,7 +122,7 @@ def test_full_document_review_and_info_request_lifecycle(db_session):
     assert upload_res_1.status_code == 200, upload_res_1.text
     doc_1_id = upload_res_1.json()["id"]
 
-    pdf_bytes_2 = b"%PDF-1.4 test financial report alpha 2"
+    pdf_bytes_2 = make_test_pdf_bytes(1)
     upload_res_2 = client.post(
         "/api/documents/",
         data={"document_type": "FINANCIAL_STATEMENT", "application_id": str(app_id)},
@@ -228,7 +230,7 @@ def test_full_document_review_and_info_request_lifecycle(db_session):
     assert unauth_resp.status_code in [403, 404]
 
     # 15. Customer A responds with requested document
-    resp_doc_bytes = b"%PDF-1.4 audited balance sheet FY25 authentic content"
+    resp_doc_bytes = make_test_pdf_bytes(1, text="audited balance sheet FY25 authentic content")
     respond_res = client.post(
         f"/api/customer/applications/{app_id}/information-requests/{info_req_id}/respond",
         data={"notes": "Attached signed balance sheet with partner signature and seal."},
@@ -324,7 +326,7 @@ def test_m05_4_document_review_replacement_lifecycle(db_session):
     app_id = app_res.json()["id"]
 
     # 3. Customer uploads Doc 1 (Identity Proof) & Doc 2 (Income Proof)
-    pdf_doc1 = b"%PDF-1.4 Valid Aadhaar Identity Proof Content"
+    pdf_doc1 = make_test_pdf_bytes(1)
     up1 = client.post(
         "/api/documents/",
         data={"document_type": "IDENTITY_PROOF", "application_id": str(app_id)},
@@ -334,7 +336,7 @@ def test_m05_4_document_review_replacement_lifecycle(db_session):
     assert up1.status_code == 200
     doc_1_id = up1.json()["id"]
 
-    pdf_doc2_initial = b"%PDF-1.4 Blurry and illegible salary slip content"
+    pdf_doc2_initial = make_test_pdf_bytes(1)
     up2 = client.post(
         "/api/documents/",
         data={"document_type": "INCOME_PROOF", "application_id": str(app_id)},
@@ -399,7 +401,7 @@ def test_m05_4_document_review_replacement_lifecycle(db_session):
     assert doc2_cust["status"] == DocumentStatus.REQUIRES_REUPLOAD.value
 
     # 10. Step 4: Customer uploads replacement document
-    pdf_doc2_replacement = b"%PDF-1.4 Clear and complete replacement salary slip with company stamp"
+    pdf_doc2_replacement = make_test_pdf_bytes(2)
     replace_res = client.post(
         "/api/documents/",
         data={

@@ -12,6 +12,7 @@ from app.core.security import create_user_session
 import uuid
 import io
 from app.db.session import SessionLocal
+from tests.pdf_fixtures import make_test_pdf_bytes
 
 client = TestClient(app)
 
@@ -376,7 +377,8 @@ def test_review_readiness_invalidation_lifecycle(db_session):
     db_session.commit()
 
     # --- Scenario C: Customer uploading new document invalidates readiness ---
-    file_bytes = b"%PDF-1.4 test uploaded content"
+    from tests.pdf_fixtures import make_test_pdf_bytes
+    file_bytes = make_test_pdf_bytes(1)
     resp = client.post(
         "/api/documents/",
         headers={"Authorization": f"Bearer {cust_token}"},
@@ -661,7 +663,7 @@ def test_workflow_distinction_and_info_request_resolution(db_session):
     assert inforeq_action["action_label"] == "Respond / Upload"
 
     # 4. Customer replaces deficient document
-    replace_file_bytes = io.BytesIO(b"%PDF-1.4 fresh new clear GST document")
+    replace_file_bytes = io.BytesIO(make_test_pdf_bytes(1))
     replace_resp = client.post(
         "/api/documents/",
         headers={"Authorization": f"Bearer {cust_token}"},
@@ -692,7 +694,7 @@ def test_workflow_distinction_and_info_request_resolution(db_session):
     )
 
     # 5. Customer responds to Additional Information Request
-    info_file_bytes = io.BytesIO(b"%PDF-1.4 audited balance sheet fy2025")
+    info_file_bytes = io.BytesIO(make_test_pdf_bytes(1))
     cust_respond_resp = client.post(
         f"/api/customer/applications/{app.id}/information-requests/{info_req_id}/respond",
         headers={"Authorization": f"Bearer {cust_token}"},

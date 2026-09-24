@@ -144,7 +144,8 @@ def test_full_employee_review_and_customer_sync(db):
     assert cust_detail3["information_requests"][0]["title"] == "Need Bank Statement"
 
     # 9. Customer response changes server state (uploads requested document)
-    pdf_content = b"%PDF-1.4 Mock statement document content"
+    from tests.pdf_fixtures import make_test_pdf_bytes
+    pdf_content = make_test_pdf_bytes(1)
     res_respond = client.post(
         f"/api/customer/applications/{loan_app.id}/information-requests/{req_id}/respond",
         headers=cust_headers,

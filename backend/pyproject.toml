@@ -17,6 +17,7 @@ dependencies = [
     "bcrypt>=5.0.0",
     "python-multipart>=0.0.32",
     "requests>=2.34.2",
+    "pypdf>=6.19.0",
 ]
 
 [build-system]

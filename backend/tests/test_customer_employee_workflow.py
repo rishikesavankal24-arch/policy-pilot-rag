@@ -119,7 +119,8 @@ def test_real_customer_to_employee_workflow(db_session):
     assert not any(a["id"] == app_id for a in emp_queue_before.json())
     
     # Step 2: Customer uploads document
-    file_bytes = b"Admission letter and fee schedule PDF payload"
+    from tests.pdf_fixtures import make_test_pdf_bytes
+    file_bytes = make_test_pdf_bytes(1)
     upload_res = cust_client.post(
         "/api/documents/",
         data={"document_type": "ADMISSION_LETTER", "application_id": app_id},

@@ -35,6 +35,11 @@ import {
   RefreshCw,
   FileCheck
 } from "lucide-react";
+import { 
+  formatFileSize, 
+  getMimeBadge, 
+  formatPageCount 
+} from "@/lib/documentUtils";
 
 interface DocumentItem {
   id: string;
@@ -46,6 +51,11 @@ interface DocumentItem {
   review_notes: string | null;
   created_at: string | null;
   updated_at: string | null;
+  original_filename?: string | null;
+  file_size_bytes?: number | null;
+  mime_type?: string | null;
+  file_hash?: string | null;
+  page_count?: number | null;
 }
 
 interface InformationRequestItem {
@@ -986,16 +996,34 @@ export default function EmployeeComplianceWorkspacePage() {
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      {sortedDocuments.map((doc) => (
+                      {sortedDocuments.map((doc) => {
+                        const mimeBadge = getMimeBadge(doc.mime_type, doc.original_filename);
+                        const pageText = formatPageCount(doc.page_count, doc.mime_type, doc.original_filename);
+                        const displayName = doc.original_filename || doc.file_url.split('/').pop() || "Document";
+
+                        return (
                         <div
                           key={doc.id}
                           className="p-3.5 rounded-lg bg-slate-900 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
                         >
                           <div className="space-y-1">
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
                               <span className="text-xs font-bold text-white uppercase tracking-wider">
                                 {doc.document_type.replace(/_/g, " ")}
                               </span>
+                              <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-800 text-slate-300 border border-slate-700">
+                                {mimeBadge}
+                              </span>
+                              {doc.file_size_bytes != null && (
+                                <span className="text-[10px] font-mono text-slate-400">
+                                  ({formatFileSize(doc.file_size_bytes)})
+                                </span>
+                              )}
+                              {pageText && (
+                                <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-blue-950/80 text-blue-300 border border-blue-800/60">
+                                  {pageText}
+                                </span>
+                              )}
                               <span
                                 className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${getDocumentStatusBadge(
                                   doc.status
@@ -1003,6 +1031,9 @@ export default function EmployeeComplianceWorkspacePage() {
                               >
                                 {doc.status}
                               </span>
+                            </div>
+                            <div className="text-[11px] text-slate-400 truncate max-w-md" title={displayName}>
+                              {displayName}
                             </div>
                             <div className="text-[11px] text-slate-400 font-mono space-y-0.5">
                               <p>Uploaded: {formatDateTime(doc.created_at)}</p>
@@ -1029,7 +1060,8 @@ export default function EmployeeComplianceWorkspacePage() {
                             </a>
                           </div>
                         </div>
-                      ))}
+                      );
+                      })}
                     </div>
                   )}
                 </div>

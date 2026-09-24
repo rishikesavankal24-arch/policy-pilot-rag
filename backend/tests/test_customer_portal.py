@@ -88,7 +88,8 @@ def test_customer_application_lifecycle_and_isolation(db_session):
     assert updated_app["tenure"] == 36
     
     # 4. Customer A uploads an attached document
-    file_content = b"Mock document content for identity proof"
+    from tests.pdf_fixtures import make_test_pdf_bytes
+    file_content = make_test_pdf_bytes(1)
     upload_res = client_a.post(
         "/api/documents/",
         data={"document_type": "IDENTITY_PROOF", "application_id": app_id},

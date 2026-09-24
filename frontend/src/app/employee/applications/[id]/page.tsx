@@ -32,6 +32,12 @@ import {
   FileCheck,
   FileX
 } from "lucide-react";
+import { 
+  formatFileSize, 
+  getMimeBadge, 
+  formatPageCount, 
+  sanitizeErrorMessage 
+} from "@/lib/documentUtils";
 
 interface DocumentItem {
   id: string;
@@ -43,6 +49,11 @@ interface DocumentItem {
   review_notes: string | null;
   created_at: string | null;
   updated_at: string | null;
+  original_filename?: string | null;
+  file_size_bytes?: number | null;
+  mime_type?: string | null;
+  file_hash?: string | null;
+  page_count?: number | null;
 }
 
 interface InformationRequestItem {
@@ -313,7 +324,7 @@ export default function EmployeeApplicationDetailPage() {
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.detail || `Failed to update document review (HTTP ${res.status})`);
+        throw new Error(sanitizeErrorMessage(errData.detail || `Failed to update document review (HTTP ${res.status})`));
       }
 
       setDocReviewModalOpen(false);
@@ -324,7 +335,7 @@ export default function EmployeeApplicationDetailPage() {
       await fetchDetail();
       await fetchReadiness();
     } catch (err: any) {
-      setDocReviewError(err.message || "Failed to review document.");
+      setDocReviewError(sanitizeErrorMessage(err.message || "Failed to review document."));
     } finally {
       setReviewingDocId(null);
     }
@@ -808,11 +819,32 @@ export default function EmployeeApplicationDetailPage() {
                       {sortedDocuments.map((doc) => {
                         const canReview = ["SUBMITTED", "UNDER_REVIEW", "ADDITIONAL_INFO_REQUIRED"].includes(data.application.status);
                         const isDocReviewing = reviewingDocId === doc.id;
+                        const mimeBadge = getMimeBadge(doc.mime_type, doc.original_filename);
+                        const pageText = formatPageCount(doc.page_count, doc.mime_type, doc.original_filename);
+                        const displayName = doc.original_filename || doc.file_url.split('/').pop() || "Document";
 
                         return (
                           <tr key={doc.id} className="hover:bg-slate-800/40">
                             <td className="px-4 py-3 font-medium text-slate-200">
-                              <div>{doc.document_type.replace(/_/g, " ")}</div>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span>{doc.document_type.replace(/_/g, " ")}</span>
+                                <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-700/80 text-slate-200">
+                                  {mimeBadge}
+                                </span>
+                                {doc.file_size_bytes != null && (
+                                  <span className="text-[10px] font-mono text-slate-400">
+                                    ({formatFileSize(doc.file_size_bytes)})
+                                  </span>
+                                )}
+                                {pageText && (
+                                  <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-blue-950/80 text-blue-300 border border-blue-800/60">
+                                    {pageText}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[11px] text-slate-400 truncate max-w-[220px]" title={displayName}>
+                                {displayName}
+                              </div>
                               <span className="text-[10px] font-mono text-slate-500">ID: {doc.id.slice(0, 8)}</span>
                             </td>
                             <td className="px-4 py-3">

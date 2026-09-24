@@ -231,6 +231,19 @@ export interface TranslationDictionary {
     uploadAndSave: string;
     uploading: string;
     failedUpload: string;
+    replaceDocument: string;
+    replaceModalTitle: string;
+    uploadReplacement: string;
+    uploadingReplacement: string;
+    replacesLabel: string;
+    reasonLabel: string;
+    replacePrompt: string;
+    viewDoc: string;
+    fileSize: string;
+    pages: string;
+    page: string;
+    na: string;
+    reuploadRequired: string;
   };
   notificationsPage: {
     title: string;

@@ -224,7 +224,20 @@ export const ml: TranslationDictionary = {
     cancel: "റദ്ദാക്കുക",
     uploadAndSave: "അപ്‌ലോഡ് ചെയ്ത് സൂക്ഷിക്കുക",
     uploading: "അപ്‌ലോഡ് ചെയ്യുന്നു...",
-    failedUpload: "രേഖ അപ്‌ലോഡ് ചെയ്യുന്നതിൽ പരാജയപ്പെട്ടു."
+    failedUpload: "രേഖ അപ്‌ലോഡ് ചെയ്യുന്നതിൽ പരാജയപ്പെട്ടു.",
+    replaceDocument: "രേഖ മാറ്റുക",
+    replaceModalTitle: "ന്യൂനതയുള്ള രേഖ മാറ്റുക",
+    uploadReplacement: "പകരമുള്ള രേഖ അപ്‌ലോഡ് ചെയ്യുക",
+    uploadingReplacement: "പകരമുള്ള രേഖ അപ്‌ലോഡ് ചെയ്യുന്നു...",
+    replacesLabel: "മാറ്റപ്പെടുന്ന രേഖ",
+    reasonLabel: "ന്യൂനതയുടെ കാരണം",
+    replacePrompt: "പകരമുള്ള ഫയൽ തിരഞ്ഞെടുക്കുക (PDF, JPEG, അല്ലെങ്കിൽ PNG, പരമാവധി 10 MB).",
+    viewDoc: "കാണുക",
+    fileSize: "വലിപ്പം",
+    pages: "പേജുകൾ",
+    page: "പേജ്",
+    na: "ബാധകമല്ല",
+    reuploadRequired: "വീണ്ടും അപ്‌ലോഡ് ചെയ്യേണ്ടതുണ്ട്"
   },
   notificationsPage: {
     title: "അറിയിപ്പുകൾ",
