@@ -332,3 +332,120 @@ def test_compliance_officer_review_notes(db_session):
     assert len(res_data["review_notes"]) == 1
     assert res_data["review_notes"][0]["note"] == "Applicant credit history verified across bureau records. No defaults recorded."
     assert any(ae["event_type"] == "COMPLIANCE_NOTE_RECORDED" for ae in res_data["audit_events"])
+
+
+def test_unverified_employee_forbidden(db_session):
+    customer = create_user_helper(db_session, "app_unv", role=Role.CUSTOMER.value)
+    unverified_emp = create_user_helper(
+        db_session,
+        "unv_emp",
+        role=Role.EMPLOYEE.value,
+        onboarding_status=OnboardingStatus.PENDING_VERIFICATION.value
+    )
+
+    app_obj = Application(
+        user_id=customer.id,
+        loan_type="Home Loan",
+        requested_amount=3000000,
+        tenure=120,
+        purpose="Flat Purchase",
+        status=ApplicationStatus.SUBMITTED.value
+    )
+    db_session.add(app_obj)
+    db_session.commit()
+    db_session.refresh(app_obj)
+
+    token = create_user_session(db_session, unverified_emp.id)
+
+    resp = client.get(
+        f"/api/employee/applications/{app_obj.id}/compliance",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 403
+    assert "pending approval" in resp.json()["detail"].lower() or "restricted" in resp.json()["detail"].lower()
+
+
+def test_application_submission_creates_audit_event_and_timestamp(db_session):
+    customer = create_user_helper(db_session, "app_sub", role=Role.CUSTOMER.value)
+
+    # 1. Customer creates draft application
+    draft_app = Application(
+        user_id=customer.id,
+        loan_type="Home Loan",
+        requested_amount=1500000,
+        tenure=120,
+        purpose="Construction",
+        status=ApplicationStatus.DRAFT.value
+    )
+    db_session.add(draft_app)
+    db_session.commit()
+    db_session.refresh(draft_app)
+
+    cust_token = create_user_session(db_session, customer.id)
+
+    # 2. Customer submits the application
+    resp = client.post(
+        f"/api/applications/{draft_app.id}/submit",
+        headers={"Authorization": f"Bearer {cust_token}"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == ApplicationStatus.SUBMITTED.value
+
+    # 3. Verify APPLICATION_SUBMITTED audit event was created
+    audit = (
+        db_session.query(ApplicationAuditEvent)
+        .filter(
+            ApplicationAuditEvent.application_id == draft_app.id,
+            ApplicationAuditEvent.event_type == "APPLICATION_SUBMITTED"
+        )
+        .first()
+    )
+    assert audit is not None
+    assert audit.user_id == customer.id
+    assert audit.created_at is not None
+    assert "formally submitted" in audit.description
+
+
+def test_compliance_workspace_timestamps_and_customer_notes_isolation(db_session):
+    customer = create_user_helper(db_session, "iso_cust", role=Role.CUSTOMER.value)
+    employee = create_user_helper(db_session, "iso_emp", role=Role.EMPLOYEE.value)
+
+    app_obj = Application(
+        user_id=customer.id,
+        loan_type="Home Loan",
+        requested_amount=2000000,
+        tenure=180,
+        purpose="Flat Purchase",
+        status=ApplicationStatus.UNDER_REVIEW.value
+    )
+    db_session.add(app_obj)
+    db_session.commit()
+    db_session.refresh(app_obj)
+
+    emp_token = create_user_session(db_session, employee.id)
+    cust_token = create_user_session(db_session, customer.id)
+
+    # Add internal note
+    note_resp = client.post(
+        f"/api/employee/applications/{app_obj.id}/compliance/notes",
+        json={"note": "CONFIDENTIAL INTERNAL NOTE: Credit risk score acceptable."},
+        headers={"Authorization": f"Bearer {emp_token}"}
+    )
+    assert note_resp.status_code == 200
+
+    # Customer fetches their application
+    cust_get_resp = client.get(
+        f"/api/applications/{app_obj.id}",
+        headers={"Authorization": f"Bearer {cust_token}"}
+    )
+    assert cust_get_resp.status_code == 200
+    cust_data = cust_get_resp.json()
+
+    # Verify customer payload does NOT contain compliance notes, audit trail, or checklist
+    assert "review_notes" not in cust_data
+    assert "compliance_notes" not in cust_data
+    assert "audit_events" not in cust_data
+    assert "checklist_items" not in cust_data
+    assert "readiness" not in cust_data
+    # Content of the internal note must not leak into customer response
+    assert "CONFIDENTIAL INTERNAL NOTE" not in str(cust_data)

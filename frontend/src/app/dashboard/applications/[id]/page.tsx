@@ -17,7 +17,10 @@ import {
   ShieldCheck,
   HelpCircle,
   FileUp,
-  ExternalLink
+  ExternalLink,
+  CheckCircle2,
+  Clock,
+  XCircle
 } from "lucide-react";
 import Link from "next/link";
 import { useLanguage } from "@/i18n/LanguageContext";
@@ -95,6 +98,12 @@ export default function ApplicationDetailsPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [docUploadError, setDocUploadError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+
+  // Document Replacement state (REQUIRES_REUPLOAD)
+  const [replacingDoc, setReplacingDoc] = useState<ApplicationDocument | null>(null);
+  const [replacementFile, setReplacementFile] = useState<File | null>(null);
+  const [isUploadingReplacement, setIsUploadingReplacement] = useState(false);
+  const [replacementError, setReplacementError] = useState<string | null>(null);
 
   // Supplementary Information Request response state
   const [informationRequests, setInformationRequests] = useState<InformationRequestItem[]>([]);
@@ -297,6 +306,43 @@ export default function ApplicationDetailsPage() {
     }
   };
 
+  const handleReplaceDocument = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!replacementFile || !replacingDoc || !application) return;
+
+    setIsUploadingReplacement(true);
+    setReplacementError(null);
+    try {
+      const formData = new FormData();
+      formData.append("document_type", replacingDoc.document_type);
+      formData.append("application_id", application.id);
+      formData.append("replaces_document_id", replacingDoc.id);
+      formData.append("file", replacementFile);
+
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+      const res = await fetch(`${apiUrl}/api/documents/`, {
+        method: 'POST',
+        body: formData,
+        credentials: 'include'
+      });
+
+      if (res.ok) {
+        setReplacementFile(null);
+        setReplacingDoc(null);
+        setActionSuccess("Replacement document uploaded successfully.");
+        setTimeout(() => setActionSuccess(null), 4000);
+        await fetchApplication();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setReplacementError(errData.detail || "Failed to upload replacement document.");
+      }
+    } catch {
+      setReplacementError("Network error while uploading replacement document.");
+    } finally {
+      setIsUploadingReplacement(false);
+    }
+  };
+
   const handleDeleteDocument = async (docId: string) => {
     if (!confirm(t("common.deleteConfirm") || "Are you sure?")) return;
     
@@ -363,24 +409,25 @@ export default function ApplicationDetailsPage() {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'DRAFT':
-        return <span className="px-3 py-1 bg-slate-100 text-slate-700 rounded-full text-xs font-semibold uppercase tracking-wider">{tStatus('DRAFT')}</span>;
+        return <span className="px-3 py-1 bg-slate-100 text-slate-700 border border-slate-300 rounded-full text-xs font-semibold uppercase tracking-wider">{tStatus('DRAFT')}</span>;
       case 'SUBMITTED':
-        return <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-semibold uppercase tracking-wider">{tStatus('SUBMITTED')}</span>;
+        return <span className="px-3 py-1 bg-blue-50 text-blue-800 border border-blue-300 rounded-full text-xs font-semibold uppercase tracking-wider">{tStatus('SUBMITTED')}</span>;
       case 'UNDER_REVIEW':
-        return <span className="px-3 py-1 bg-amber-100 text-amber-800 rounded-full text-xs font-semibold uppercase tracking-wider">{tStatus('UNDER_REVIEW')}</span>;
+        return <span className="px-3 py-1 bg-blue-50 text-blue-800 border border-blue-300 rounded-full text-xs font-semibold uppercase tracking-wider">{tStatus('UNDER_REVIEW')}</span>;
       case 'ADDITIONAL_INFO_REQUIRED':
-        return <span className="px-3 py-1 bg-purple-100 text-purple-800 rounded-full text-xs font-semibold uppercase tracking-wider">{tStatus('ADDITIONAL_INFO_REQUIRED')}</span>;
+        return <span className="px-3 py-1 bg-amber-50 text-amber-800 border border-amber-300 rounded-full text-xs font-semibold uppercase tracking-wider">{tStatus('ADDITIONAL_INFO_REQUIRED')}</span>;
       case 'APPROVED':
-        return <span className="px-3 py-1 bg-emerald-100 text-emerald-800 rounded-full text-xs font-semibold uppercase tracking-wider">{tStatus('APPROVED')}</span>;
+        return <span className="px-3 py-1 bg-emerald-50 text-emerald-800 border border-emerald-300 rounded-full text-xs font-bold uppercase tracking-wider">{tStatus('APPROVED')}</span>;
       case 'DECLINED':
-        return <span className="px-3 py-1 bg-red-100 text-red-800 rounded-full text-xs font-semibold uppercase tracking-wider">{tStatus('DECLINED')}</span>;
+        return <span className="px-3 py-1 bg-rose-50 text-rose-800 border border-rose-300 rounded-full text-xs font-bold uppercase tracking-wider">{tStatus('DECLINED')}</span>;
       default:
-        return <span className="px-3 py-1 bg-slate-100 text-slate-800 rounded-full text-xs font-semibold">{status}</span>;
+        return <span className="px-3 py-1 bg-slate-100 text-slate-800 border border-slate-300 rounded-full text-xs font-semibold">{status}</span>;
     }
   };
 
   const getDocStatusBadge = (status: string) => {
     switch (status) {
+      case 'ACCEPTED':
       case 'VERIFIED':
         return <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded text-xs font-medium">{t("status.verified")}</span>;
       case 'REJECTED':
@@ -481,6 +528,138 @@ export default function ApplicationDetailsPage() {
           <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center gap-3 text-emerald-800 text-sm">
             <CheckCircle className="h-5 w-5 text-emerald-600 shrink-0" />
             <span>{actionSuccess}</span>
+          </div>
+        )}
+
+        {/* Approved State Banner */}
+        {application.status === 'APPROVED' && (
+          <div className="p-6 bg-emerald-50/90 border-2 border-emerald-500 rounded-xl shadow-sm space-y-4 animate-in fade-in duration-200">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-emerald-200">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-emerald-100 rounded-xl text-emerald-700 shrink-0 border border-emerald-300">
+                  <CheckCircle2 className="h-6 w-6 text-emerald-600" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-bold text-emerald-950">
+                      Application Approved: Facility Sanctioned
+                    </h2>
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase bg-emerald-200 text-emerald-900 border border-emerald-300">
+                      {tStatus('APPROVED')}
+                    </span>
+                  </div>
+                  <p className="text-xs text-emerald-800 mt-0.5">
+                    Your loan application has been formally approved following underwriting evaluation.
+                  </p>
+                </div>
+              </div>
+
+              {application.updated_at && (
+                <div className="text-left sm:text-right text-xs font-mono text-emerald-800">
+                  <span className="text-[10px] uppercase block text-emerald-600 font-sans font-semibold">Decision Date</span>
+                  {new Date(application.updated_at).toLocaleDateString('en-US', {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric'
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-white/80 p-3.5 rounded-lg border border-emerald-200 text-xs">
+              <div>
+                <span className="text-[10px] uppercase font-semibold text-slate-500 block">Sanctioned Amount</span>
+                <span className="text-sm font-bold text-slate-900 font-mono">
+                  ₹{Number(application.requested_amount).toLocaleString('en-IN')}
+                </span>
+              </div>
+              <div>
+                <span className="text-[10px] uppercase font-semibold text-slate-500 block">Facility Type</span>
+                <span className="font-semibold text-slate-800">{tLoanType(application.loan_type)}</span>
+              </div>
+              <div>
+                <span className="text-[10px] uppercase font-semibold text-slate-500 block">Tenure</span>
+                <span className="font-semibold text-slate-800">{application.tenure} {t("newApplication.monthsSuffix")}</span>
+              </div>
+              <div>
+                <span className="text-[10px] uppercase font-semibold text-slate-500 block">Record Status</span>
+                <span className="font-bold text-emerald-700">Official / Locked</span>
+              </div>
+            </div>
+
+            <p className="text-xs text-emerald-900/90 leading-relaxed">
+              Official confirmation of your approved facility is committed in bank records. An automated notice has been sent to your registered communication channels. Further disbursement procedures and sanction documents are administered through operations.
+            </p>
+          </div>
+        )}
+
+        {/* Declined State Banner */}
+        {application.status === 'DECLINED' && (
+          <div className="p-6 bg-rose-50/90 border-2 border-rose-300 rounded-xl shadow-sm space-y-4 animate-in fade-in duration-200">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-rose-200">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-rose-100 rounded-xl text-rose-700 shrink-0 border border-rose-300">
+                  <XCircle className="h-6 w-6 text-rose-600" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-bold text-rose-950">
+                      Application Declined: Evaluation Concluded
+                    </h2>
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase bg-rose-200 text-rose-900 border border-rose-300">
+                      {tStatus('DECLINED')}
+                    </span>
+                  </div>
+                  <p className="text-xs text-rose-800 mt-0.5">
+                    We regret to inform you that your loan application could not be approved at this time.
+                  </p>
+                </div>
+              </div>
+
+              {application.updated_at && (
+                <div className="text-left sm:text-right text-xs font-mono text-rose-800">
+                  <span className="text-[10px] uppercase block text-rose-600 font-sans font-semibold">Decision Date</span>
+                  {new Date(application.updated_at).toLocaleDateString('en-US', {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric'
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="p-3.5 bg-white/80 rounded-lg border border-rose-200 text-xs text-rose-950 space-y-1">
+              <p className="font-semibold text-rose-900">Institutional Decision Explanation:</p>
+              <p className="text-xs text-slate-700 leading-relaxed">
+                Following thorough underwriting evaluation of credit parameters, debt-to-income benchmarks, and submitted documentation against institutional lending criteria, this application does not satisfy the requirements necessary for approval.
+              </p>
+            </div>
+
+            <p className="text-xs text-slate-500 italic">
+              This application dossier is concluded and locked in accordance with data preservation policies. No further documentation or changes can be accepted for this case reference.
+            </p>
+          </div>
+        )}
+
+        {/* Under Review Banner */}
+        {application.status === 'UNDER_REVIEW' && (
+          <div className="p-5 bg-blue-50 border border-blue-200 rounded-xl flex items-start gap-4 shadow-sm animate-in fade-in duration-200">
+            <div className="p-2.5 bg-blue-100 rounded-lg text-blue-700 shrink-0 mt-0.5 border border-blue-200">
+              <Clock className="h-6 w-6 text-blue-600" />
+            </div>
+            <div className="flex-1">
+              <div className="flex items-center gap-2">
+                <h3 className="font-bold text-blue-950 text-base">
+                  Application Under Review
+                </h3>
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-200 text-blue-900">
+                  {tStatus('UNDER_REVIEW')}
+                </span>
+              </div>
+              <p className="text-xs text-blue-900/90 mt-1.5 leading-relaxed">
+                Your loan application is currently under formal evaluation by our credit underwriting team. All documentation and eligibility criteria are being verified. You will be notified automatically if supplementary details are required or when a final decision is recorded.
+              </p>
+            </div>
           </div>
         )}
 
@@ -703,32 +882,103 @@ export default function ApplicationDetailsPage() {
               )}
             </div>
 
-            {/* Supplementary Documentation Requests Card */}
-            {informationRequests && informationRequests.length > 0 && (
-              <div className="bg-white border-2 border-amber-200 rounded-xl shadow-sm overflow-hidden">
-                <div className="px-6 py-4 border-b border-amber-100 flex justify-between items-center bg-amber-50/60">
-                  <div className="flex items-center gap-2 text-amber-900">
-                    <AlertCircle className="h-5 w-5 text-amber-700" />
-                    <h2 className="font-bold text-base text-amber-950">
-                      Underwriter Information Requests ({informationRequests.length})
-                    </h2>
+            {/* Dedicated Workflow 1: DOCUMENT REPLACEMENT REQUIRED (Rule 1: Existing Deficient Documents) */}
+            {!isDecided && documents.some(d => d.status === 'REQUIRES_REUPLOAD') && (
+              <div className="bg-amber-50/90 border-2 border-amber-300 rounded-xl shadow-sm overflow-hidden">
+                <div className="px-6 py-4 border-b border-amber-200 bg-amber-100/70 flex items-center justify-between">
+                  <div className="flex items-center gap-2.5 text-amber-950">
+                    <AlertCircle className="h-5 w-5 text-amber-700 shrink-0" />
+                    <div>
+                      <h2 className="font-bold text-sm uppercase tracking-wider text-amber-950">
+                        DOCUMENT REPLACEMENT REQUIRED
+                      </h2>
+                      <p className="text-xs text-amber-900/80">
+                        An existing submitted document requires replacement or correction based on underwriting review.
+                      </p>
+                    </div>
                   </div>
-                  <span className="text-xs font-semibold px-2.5 py-1 rounded bg-amber-200/80 text-amber-900">
-                    {informationRequests.filter(r => r.status === 'OPEN').length} Pending
+                  <span className="text-xs font-bold px-2.5 py-1 rounded bg-amber-200 text-amber-900 border border-amber-300">
+                    {documents.filter(d => d.status === 'REQUIRES_REUPLOAD').length} Replacement(s) Required
                   </span>
                 </div>
 
-                <div className="divide-y divide-amber-100/80">
-                  {informationRequests.map((req) => {
-                    const isOpen = req.status === 'OPEN';
+                <div className="divide-y divide-amber-200/80">
+                  {documents.filter(d => d.status === 'REQUIRES_REUPLOAD').map((doc) => {
+                    const reasonText = doc.review_notes && !["nil", "none"].includes(doc.review_notes.trim().toLowerCase()) 
+                      ? doc.review_notes 
+                      : "Correction or clearer copy required";
 
                     return (
-                      <div key={req.id} className="p-6 space-y-3 hover:bg-amber-50/20 transition-colors">
+                      <div key={doc.id} className="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <FileText className="h-4 w-4 text-amber-700" />
+                            <span className="font-bold text-sm text-slate-900">
+                              {doc.document_type.replace(/_/g, " ").toUpperCase()}
+                            </span>
+                            <span className="text-[10px] font-mono text-slate-500">ID: {doc.id.slice(0, 8)}</span>
+                          </div>
+                          <div className="text-xs text-amber-950 bg-white/90 p-2.5 rounded-lg border border-amber-200">
+                            <span className="font-semibold text-amber-900">Deficiency Reason: </span>
+                            <span>{reasonText}</span>
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={() => {
+                            setReplacingDoc(doc);
+                            setReplacementFile(null);
+                            setReplacementError(null);
+                          }}
+                          className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-colors shadow-sm flex items-center gap-1.5 shrink-0 self-start sm:self-center cursor-pointer"
+                        >
+                          <Upload className="h-3.5 w-3.5" />
+                          <span>Replace Document</span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Dedicated Workflow 2: ADDITIONAL INFORMATION REQUIRED (Rule 2: New Information / Queries) */}
+            {informationRequests && informationRequests.length > 0 && (
+              <div className="bg-blue-50/70 border-2 border-blue-200 rounded-xl shadow-sm overflow-hidden">
+                <div className="px-6 py-4 border-b border-blue-100 flex justify-between items-center bg-blue-100/60">
+                  <div className="flex items-center gap-2.5 text-blue-950">
+                    <HelpCircle className="h-5 w-5 text-blue-700 shrink-0" />
+                    <div>
+                      <h2 className="font-bold text-sm uppercase tracking-wider text-blue-950">
+                        ADDITIONAL INFORMATION REQUIRED
+                      </h2>
+                      <p className="text-xs text-blue-900/80">
+                        The underwriter requires new information, clarification, or a document that was not previously submitted.
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-xs font-semibold px-2.5 py-1 rounded bg-blue-200 text-blue-900">
+                    {informationRequests.filter(r => r.status === 'OPEN').length} Open Query
+                  </span>
+                </div>
+
+                <div className="divide-y divide-blue-100">
+                  {informationRequests.map((req) => {
+                    const isOpen = req.status === 'OPEN';
+                    const isResolved = req.status === 'RESOLVED';
+
+                    return (
+                      <div key={req.id} className="p-6 space-y-3 hover:bg-blue-50/40 transition-colors">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                           <div className="flex items-center gap-2">
                             <h3 className="font-bold text-sm text-slate-900">{req.title}</h3>
-                            {isOpen ? (
-                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                            {isResolved ? (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-200 text-slate-700 border border-slate-300 flex items-center gap-1">
+                                <CheckCircle className="h-3 w-3 text-emerald-600" />
+                                <span>RESOLVED</span>
+                              </span>
+                            ) : isOpen ? (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-900 border border-blue-300">
                                 ACTION REQUIRED
                               </span>
                             ) : (
@@ -748,12 +998,12 @@ export default function ApplicationDetailsPage() {
                         </p>
 
                         {req.requested_document_type && (
-                          <p className="text-[11px] font-mono text-slate-600 bg-slate-50 p-2 rounded border border-slate-200">
-                            Requested Document Type: <span className="font-semibold text-slate-900">{req.requested_document_type}</span>
+                          <p className="text-[11px] font-mono text-blue-950 bg-white p-2 rounded border border-blue-200">
+                            Requested Document Type: <span className="font-semibold text-blue-900">{req.requested_document_type}</span>
                           </p>
                         )}
 
-                        {isOpen ? (
+                        {isOpen && !isDecided ? (
                           <div className="pt-2 flex justify-end">
                             <button
                               onClick={() => {
@@ -762,11 +1012,16 @@ export default function ApplicationDetailsPage() {
                                 setResponseNotes("");
                                 setResponseError(null);
                               }}
-                              className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 shadow-sm"
+                              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 shadow-sm cursor-pointer"
                             >
                               <Upload className="h-3.5 w-3.5" />
-                              <span>Upload Requested Document</span>
+                              <span>Respond / Upload</span>
                             </button>
+                          </div>
+                        ) : isResolved ? (
+                          <div className="mt-2 p-3 bg-slate-100 rounded-lg border border-slate-200 text-xs text-slate-600">
+                            <span className="font-semibold text-slate-800">Review Status: </span>
+                            <span>Satisfactorily reviewed and marked resolved by underwriter.</span>
                           </div>
                         ) : (
                           <div className="mt-2 p-3 bg-emerald-50 rounded-lg border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
@@ -808,13 +1063,15 @@ export default function ApplicationDetailsPage() {
                   <FileText className="h-5 w-5 text-slate-600" />
                   <h2 className="font-semibold text-base text-slate-900">{t("applicationDetails.attachedDocsTitle")} ({documents.length})</h2>
                 </div>
-                <button
-                  onClick={() => setShowDocUpload(!showDocUpload)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 text-white rounded-md text-xs font-medium hover:bg-slate-800 transition-colors"
-                >
-                  <Upload className="h-3.5 w-3.5" />
-                  {t("applicationDetails.attachDocument")}
-                </button>
+                {isDraft && (
+                  <button
+                    onClick={() => setShowDocUpload(!showDocUpload)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 text-white rounded-md text-xs font-medium hover:bg-slate-800 transition-colors"
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                    {t("applicationDetails.attachDocument")}
+                  </button>
+                )}
               </div>
 
               {/* Upload Document Form */}
@@ -917,6 +1174,20 @@ export default function ApplicationDetailsPage() {
 
                         <div className="flex items-center gap-3">
                           {getDocStatusBadge(doc.status)}
+                          {doc.status === 'REQUIRES_REUPLOAD' && !isDecided && (
+                            <button
+                              onClick={() => {
+                                setReplacingDoc(doc);
+                                setReplacementFile(null);
+                                setReplacementError(null);
+                              }}
+                              className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-bold transition-colors inline-flex items-center gap-1 shadow-sm cursor-pointer"
+                              title="Replace Document"
+                            >
+                              <Upload className="h-3 w-3" />
+                              <span>Replace</span>
+                            </button>
+                          )}
                           <a
                             href={`${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/documents/${doc.id}/content`}
                             target="_blank"
@@ -1014,6 +1285,18 @@ export default function ApplicationDetailsPage() {
                       {application.status === 'DECLINED' && t("applicationDetails.criteriaUnmet")}
                       {!isDecided && t("applicationDetails.finalDecisionPending")}
                     </p>
+                    {isDecided && application.updated_at && (
+                      <p className="text-[11px] text-slate-500 font-mono mt-1 flex items-center gap-1">
+                        <Clock className="h-3 w-3 text-slate-400 shrink-0" />
+                        <span>
+                          {new Date(application.updated_at).toLocaleDateString('en-US', {
+                            year: 'numeric',
+                            month: 'short',
+                            day: 'numeric'
+                          })}
+                        </span>
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1127,6 +1410,77 @@ export default function ApplicationDetailsPage() {
                   className="px-5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-colors disabled:opacity-50 flex items-center gap-1.5 shadow-sm"
                 >
                   {isSubmittingResponse ? "Uploading & Responding..." : "Submit Response"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Replace Deficient Document */}
+      {replacingDoc && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2 text-amber-700">
+                <Upload className="h-5 w-5" />
+                <h3 className="font-bold text-sm uppercase tracking-wider text-slate-900">
+                  Replace Document
+                </h3>
+              </div>
+              <button
+                onClick={() => setReplacingDoc(null)}
+                className="text-slate-400 hover:text-slate-600 text-sm cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-3 bg-amber-50 rounded-lg border border-amber-200 text-xs text-amber-950 space-y-1">
+              <p className="font-semibold">
+                Document: {replacingDoc.document_type.replace(/_/g, " ").toUpperCase()}
+              </p>
+              <p className="text-amber-900">
+                <span className="font-semibold">Underwriter reason: </span>
+                {replacingDoc.review_notes && !["nil", "none"].includes(replacingDoc.review_notes.trim().toLowerCase()) 
+                  ? replacingDoc.review_notes 
+                  : "Correction or clearer copy required"}
+              </p>
+            </div>
+
+            {replacementError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg">
+                {replacementError}
+              </div>
+            )}
+
+            <form onSubmit={handleReplaceDocument} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Choose Replacement File <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="file"
+                  onChange={(e) => setReplacementFile(e.target.files?.[0] || null)}
+                  className="w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-amber-100 file:text-amber-900 hover:file:bg-amber-200 border border-slate-300 rounded-lg p-1"
+                  required
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setReplacingDoc(null)}
+                  className="px-3 py-1.5 text-xs text-slate-600 hover:text-slate-800 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isUploadingReplacement || !replacementFile}
+                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 disabled:bg-amber-400 text-white rounded-lg text-xs font-bold transition-colors disabled:cursor-not-allowed cursor-pointer"
+                >
+                  {isUploadingReplacement ? "Uploading Replacement..." : "Upload Replacement"}
                 </button>
               </div>
             </form>

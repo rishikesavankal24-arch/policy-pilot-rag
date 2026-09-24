@@ -17,8 +17,13 @@ def db_session():
         yield db
     finally:
         db.rollback()
+        from app.db.models import ApplicationAuditEvent, AdditionalInformationRequest
         test_users = db.query(User).filter(User.email.like("test_emp_%@example.com")).all()
         for user in test_users:
+            apps = db.query(Application).filter(Application.user_id == user.id).all()
+            for app_obj in apps:
+                db.query(AdditionalInformationRequest).filter(AdditionalInformationRequest.application_id == app_obj.id).delete()
+                db.query(ApplicationAuditEvent).filter(ApplicationAuditEvent.application_id == app_obj.id).delete()
             db.query(Notification).filter(Notification.user_id == user.id).delete()
             db.query(Document).filter(Document.user_id == user.id).delete()
             db.query(Application).filter(Application.user_id == user.id).delete()

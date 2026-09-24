@@ -155,6 +155,7 @@ export default function DocumentsPage() {
           className: 'bg-amber-50 text-amber-800 border-amber-300',
           icon: <div className="h-3 w-3 rounded-full border-2 border-amber-600 border-t-transparent animate-spin" />
         };
+      case 'ACCEPTED':
       case 'VERIFIED': 
         return {
           label: t("status.verified"),

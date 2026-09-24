@@ -4,14 +4,16 @@ from typing import Optional, List
 from uuid import UUID
 
 from datetime import datetime, timezone
+import re
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from app.db.session import get_db
 from app.db.models import (
     User, Role, OnboardingStatus, Application, ApplicationStatus,
     Document, DocumentStatus, Notification, EmployeeRequest, EmployeeRequestStatus,
     InformationRequestStatus, AdditionalInformationRequest, ApplicationAuditEvent,
-    ComplianceChecklistStatus, ComplianceChecklistItem, ComplianceReviewNote
+    ComplianceChecklistStatus, ComplianceChecklistItem, ComplianceReviewNote,
+    ReviewReadinessState
 )
 from app.api.deps import require_verified_employee, check_employee_review_not_owner
 
@@ -95,6 +97,32 @@ class InformationRequestItem(BaseModel):
     response_notes: Optional[str] = None
     created_at: Optional[str] = None
     responded_at: Optional[str] = None
+    resolved_at: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+class ResolveInformationRequestRequest(BaseModel):
+    notes: Optional[str] = None
+
+class ApplicationDecisionRequest(BaseModel):
+    status: str
+    notes: Optional[str] = None
+
+    @field_validator("notes")
+    @classmethod
+    def trim_notes(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        trimmed = v.strip()
+        return trimmed if trimmed else None
+
+class ApplicationDecisionResponse(BaseModel):
+    id: str
+    status: str
+    decision: str
+    notes: Optional[str] = None
+    updated_at: Optional[str] = None
+    message: str
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -180,6 +208,45 @@ class ComplianceAuditEventItem(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+class ChecklistSummarySchema(BaseModel):
+    total: int
+    reviewed: int
+    pending: int
+    requires_information: int
+    not_applicable: int
+
+class DocumentSummarySchema(BaseModel):
+    total: int
+    verified_or_accepted: int
+    pending_review: int
+    rejected_or_reupload: int
+
+class InfoRequestsSummarySchema(BaseModel):
+    total: int
+    open: int
+    responded: int
+    resolved: int
+
+class ReviewReadinessResponse(BaseModel):
+    application_id: str
+    status: str
+    is_ready: bool
+    can_mark_ready: bool
+    blocking_reasons: List[str]
+    completed_checks: List[str]
+    pending_checks: List[str]
+    checklist_summary: ChecklistSummarySchema
+    document_summary: DocumentSummarySchema
+    info_requests_summary: InfoRequestsSummarySchema
+    updated_at: Optional[str] = None
+    updated_by: Optional[str] = None
+    updated_by_name: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+class ReviewReadinessResetRequest(BaseModel):
+    reason: Optional[str] = None
+
 class ComplianceWorkspaceResponse(BaseModel):
     application: ApplicationDetailInfo
     applicant: ApplicantKYCInfo
@@ -189,6 +256,7 @@ class ComplianceWorkspaceResponse(BaseModel):
     information_requests: List[InformationRequestItem]
     audit_events: List[ComplianceAuditEventItem]
     ai_rag_boundary: dict
+    readiness: Optional[ReviewReadinessResponse] = None
 
 STANDARD_COMPLIANCE_CHECKLIST = [
     {
@@ -227,6 +295,169 @@ STANDARD_COMPLIANCE_CHECKLIST = [
         "display_order": 5,
     },
 ]
+
+
+def invalidate_review_readiness(app: Application, db: Session, actor_id: Optional[UUID], reason: str):
+    """
+    If an application was marked READY_FOR_COMPLIANCE_ASSESSMENT,
+    and a conflicting action or new information arrives,
+    immediately reset review_readiness_status to PENDING_REVIEW_PREPARATION
+    and log an immutable ApplicationAuditEvent.
+    """
+    if getattr(app, "review_readiness_status", None) == ReviewReadinessState.READY_FOR_COMPLIANCE_ASSESSMENT.value:
+        prev_state = app.review_readiness_status
+        app.review_readiness_status = ReviewReadinessState.PENDING_REVIEW_PREPARATION.value
+        app.review_readiness_updated_at = datetime.now(timezone.utc)
+        app.review_readiness_updated_by = actor_id
+        
+        actor = db.query(User).filter(User.id == actor_id).first() if actor_id else None
+        actor_label = actor.full_name or actor.email if actor else "Authorized User"
+
+        audit = ApplicationAuditEvent(
+            application_id=app.id,
+            user_id=actor_id,
+            event_type="COMPLIANCE_REVIEW_READINESS_RESET",
+            title="Review Readiness Invalidated",
+            description=f"Review readiness state reset from {prev_state} to PENDING_REVIEW_PREPARATION by {actor_label}. Reason: {reason}"
+        )
+        db.add(audit)
+
+
+def calculate_review_readiness(app: Application, db: Session) -> dict:
+    """
+    Calculates review readiness dynamically from real database state.
+    Evaluates:
+    - Application submission status
+    - Document availability & review statuses
+    - Additional information requests status
+    - Compliance checklist evaluation status
+    """
+    blocking_reasons: List[str] = []
+    completed_checks: List[str] = []
+    pending_checks: List[str] = []
+
+    # 1. Application submission check
+    if app.status == ApplicationStatus.DRAFT.value:
+        blocking_reasons.append("Application is in draft status and has not been formally submitted.")
+        pending_checks.append("Formal application submission by applicant")
+    else:
+        completed_checks.append(f"Application formally submitted (Status: {app.status})")
+
+    # 2. Document completeness & review check
+    documents = db.query(Document).filter(Document.application_id == app.id).all()
+    total_docs = len(documents)
+    verified_docs = sum(1 for d in documents if d.status in [DocumentStatus.ACCEPTED.value, DocumentStatus.VERIFIED.value])
+    pending_docs = sum(1 for d in documents if d.status in [DocumentStatus.UPLOADED.value, DocumentStatus.PROCESSING.value, DocumentStatus.UNDER_REVIEW.value])
+    rejected_or_reupload_docs = sum(1 for d in documents if d.status in [DocumentStatus.REQUIRES_REUPLOAD.value, DocumentStatus.REJECTED.value])
+
+    if total_docs == 0:
+        blocking_reasons.append("No verification documents have been uploaded for this application.")
+        pending_checks.append("Mandatory verification documentation upload")
+    else:
+        if rejected_or_reupload_docs > 0:
+            for d in documents:
+                if d.status in [DocumentStatus.REQUIRES_REUPLOAD.value, DocumentStatus.REJECTED.value]:
+                    notes_text = d.review_notes if (d.review_notes and d.review_notes.strip().lower() not in ["nil", "none"]) else "Reason not recorded"
+                    blocking_reasons.append(f"Document '{d.document_type.replace('_', ' ')}' requires re-upload or was rejected ({notes_text}).")
+            pending_checks.append(f"{rejected_or_reupload_docs} document(s) require re-upload or rectification")
+        
+        if pending_docs > 0:
+            for d in documents:
+                if d.status in [DocumentStatus.UPLOADED.value, DocumentStatus.PROCESSING.value, DocumentStatus.UNDER_REVIEW.value]:
+                    blocking_reasons.append(f"Document '{d.document_type.replace('_', ' ')}' is awaiting operational review.")
+            pending_checks.append(f"{pending_docs} document(s) awaiting credit officer review")
+
+        if verified_docs == total_docs and total_docs > 0:
+            completed_checks.append(f"All {total_docs} submitted document(s) verified by credit operations")
+
+    # 3. Additional information requests check
+    info_requests = db.query(AdditionalInformationRequest).filter(AdditionalInformationRequest.application_id == app.id).all()
+    open_reqs = [ir for ir in info_requests if ir.status == InformationRequestStatus.OPEN.value]
+    responded_reqs = [ir for ir in info_requests if ir.status == InformationRequestStatus.RESPONDED.value]
+    resolved_reqs = [ir for ir in info_requests if ir.status in [InformationRequestStatus.RESOLVED.value, InformationRequestStatus.CANCELLED.value]]
+
+    if open_reqs:
+        for ir in open_reqs:
+            blocking_reasons.append(f"Additional information request '{ir.title}' is pending applicant response.")
+        pending_checks.append(f"{len(open_reqs)} open query/information request(s) awaiting applicant action")
+
+    if responded_reqs:
+        for ir in responded_reqs:
+            blocking_reasons.append(f"Applicant responded to '{ir.title}'; review of response is required.")
+        pending_checks.append(f"{len(responded_reqs)} customer response(s) pending officer verification")
+
+    if not open_reqs and not responded_reqs:
+        if info_requests:
+            completed_checks.append(f"All {len(info_requests)} information request(s) resolved")
+        else:
+            completed_checks.append("No open information requests or queries")
+
+    # 4. Compliance checklist check
+    checklist_items = db.query(ComplianceChecklistItem).filter(ComplianceChecklistItem.application_id == app.id).all()
+    total_items = len(checklist_items)
+    pending_items = [it for it in checklist_items if it.status == ComplianceChecklistStatus.PENDING.value]
+    req_info_items = [it for it in checklist_items if it.status == ComplianceChecklistStatus.REQUIRES_INFORMATION.value]
+    not_applicable_items = [it for it in checklist_items if it.status == ComplianceChecklistStatus.NOT_APPLICABLE.value]
+    reviewed_only_items = [it for it in checklist_items if it.status == ComplianceChecklistStatus.REVIEWED.value]
+
+    if total_items == 0:
+        blocking_reasons.append("Compliance checklist has not been initialized.")
+        pending_checks.append("Compliance checklist evaluation")
+    else:
+        if pending_items:
+            for it in pending_items:
+                blocking_reasons.append(f"Compliance checklist item '{it.title}' has not been evaluated (status is PENDING).")
+            pending_checks.append(f"{len(pending_items)} checklist item(s) pending evaluation")
+
+        if req_info_items:
+            for it in req_info_items:
+                blocking_reasons.append(f"Compliance checklist item '{it.title}' requires additional information before compliance assessment can proceed.")
+            pending_checks.append(f"{len(req_info_items)} checklist item(s) flagged as requiring information")
+
+        if not pending_items and not req_info_items:
+            completed_checks.append(f"All {total_items} compliance checklist item(s) reviewed and verified")
+
+    is_ready = (len(blocking_reasons) == 0)
+    current_readiness = getattr(app, "review_readiness_status", ReviewReadinessState.PENDING_REVIEW_PREPARATION.value)
+    can_mark_ready = is_ready and (current_readiness != ReviewReadinessState.READY_FOR_COMPLIANCE_ASSESSMENT.value)
+
+    updater_name = None
+    if getattr(app, "review_readiness_updated_by", None):
+        updater = db.query(User).filter(User.id == app.review_readiness_updated_by).first()
+        if updater:
+            updater_name = updater.full_name or updater.email
+
+    return {
+        "application_id": str(app.id),
+        "status": current_readiness,
+        "is_ready": is_ready,
+        "can_mark_ready": can_mark_ready,
+        "blocking_reasons": blocking_reasons,
+        "completed_checks": completed_checks,
+        "pending_checks": pending_checks,
+        "checklist_summary": {
+            "total": total_items,
+            "reviewed": len(reviewed_only_items),
+            "pending": len(pending_items),
+            "requires_information": len(req_info_items),
+            "not_applicable": len(not_applicable_items)
+        },
+        "document_summary": {
+            "total": total_docs,
+            "verified_or_accepted": verified_docs,
+            "pending_review": pending_docs,
+            "rejected_or_reupload": rejected_or_reupload_docs
+        },
+        "info_requests_summary": {
+            "total": len(info_requests),
+            "open": len(open_reqs),
+            "responded": len(responded_reqs),
+            "resolved": len(resolved_reqs)
+        },
+        "updated_at": app.review_readiness_updated_at.isoformat() if getattr(app, "review_readiness_updated_at", None) else None,
+        "updated_by": str(app.review_readiness_updated_by) if getattr(app, "review_readiness_updated_by", None) else None,
+        "updated_by_name": updater_name
+    }
 
 
 @router.get("/dashboard/summary")
@@ -407,14 +638,17 @@ def get_employee_application_detail(
     if str(app.user_id) == str(current_user.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Conflict of interest: Employees cannot review their own applications. Self-review is strictly forbidden under institutional governance rules."
+            detail="Conflict of interest: Employees cannot review their own applications. Self-review is strictly forbidden under governance rules."
         )
         
     applicant = db.query(User).filter(User.id == app.user_id).first()
-    documents = db.query(Document).filter(Document.application_id == app.id).all()
+    documents = db.query(Document).filter(Document.application_id == app.id).order_by(Document.created_at.desc()).all()
     
     docs_data = []
     for doc in documents:
+        display_notes = doc.review_notes
+        if display_notes and display_notes.strip().lower() in ["nil", "none"]:
+            display_notes = "Reason not recorded"
         docs_data.append({
             "id": str(doc.id),
             "document_type": doc.document_type,
@@ -422,7 +656,7 @@ def get_employee_application_detail(
             "status": doc.status,
             "reviewed_by": str(doc.reviewed_by) if doc.reviewed_by else None,
             "reviewed_at": doc.reviewed_at.isoformat() if doc.reviewed_at else None,
-            "review_notes": doc.review_notes,
+            "review_notes": display_notes,
             "created_at": doc.created_at.isoformat() if doc.created_at else None,
             "updated_at": doc.updated_at.isoformat() if doc.updated_at else None
         })
@@ -460,40 +694,48 @@ def get_employee_application_detail(
             "response_notes": ir.response_notes,
             "created_at": ir.created_at.isoformat() if ir.created_at else None,
             "responded_at": ir.responded_at.isoformat() if ir.responded_at else None,
-        })
-
-    # Construct audit timeline based on persisted events
-    timeline = [
-        {
-            "event": "APPLICATION_SUBMITTED",
-            "title": "Application Submitted",
-            "description": "Applicant completed and formally submitted the loan application.",
-            "timestamp": app.created_at.isoformat() if app.created_at else None
-        }
-    ]
-    if app.status in [ApplicationStatus.UNDER_REVIEW.value, ApplicationStatus.APPROVED.value, ApplicationStatus.DECLINED.value, ApplicationStatus.ADDITIONAL_INFO_REQUIRED.value]:
-        timeline.append({
-            "event": "QUEUE_INGESTION",
-            "title": "Queued for Operational Review",
-            "description": "Application routed to institutional operations queue.",
-            "timestamp": app.created_at.isoformat() if app.created_at else None
-        })
-        timeline.append({
-            "event": "UNDER_REVIEW",
-            "title": "Underwriting Review Started",
-            "description": "Authorized credit officer initiated formal underwriting evaluation.",
-            "timestamp": app.updated_at.isoformat() if app.updated_at else app.created_at.isoformat()
+            "resolved_at": ir.resolved_at.isoformat() if ir.resolved_at else None,
         })
 
     # Append dynamic database audit events
     audit_records = db.query(ApplicationAuditEvent).filter(
         ApplicationAuditEvent.application_id == app.id
     ).order_by(ApplicationAuditEvent.created_at.asc()).all()
+
+    # Construct audit timeline based on persisted events
+    timeline = []
+    has_submitted_audit = any(a.event_type == "APPLICATION_SUBMITTED" for a in audit_records)
+    if not has_submitted_audit and app.status != ApplicationStatus.DRAFT.value:
+        timeline.append({
+            "event": "APPLICATION_SUBMITTED",
+            "title": "Application Submitted",
+            "description": "Applicant completed and formally submitted the loan application.",
+            "timestamp": app.created_at.isoformat() if app.created_at else None
+        })
+
+    if app.status in [ApplicationStatus.UNDER_REVIEW.value, ApplicationStatus.APPROVED.value, ApplicationStatus.DECLINED.value, ApplicationStatus.ADDITIONAL_INFO_REQUIRED.value]:
+        timeline.append({
+            "event": "QUEUE_INGESTION",
+            "title": "Queued for Operational Review",
+            "description": "Application routed to operational review queue.",
+            "timestamp": app.created_at.isoformat() if app.created_at else None
+        })
+        has_review_started = any(a.event_type == "REVIEW_STARTED" for a in audit_records)
+        if not has_review_started:
+            timeline.append({
+                "event": "UNDER_REVIEW",
+                "title": "Underwriting Review Started",
+                "description": "Authorized credit officer initiated formal underwriting evaluation.",
+                "timestamp": app.updated_at.isoformat() if app.updated_at else app.created_at.isoformat()
+            })
+
     for audit in audit_records:
+        clean_desc = audit.description or ""
+        clean_desc = re.sub(r'Reason:\s*(nil|none)\b', 'Reason: Reason not recorded', clean_desc, flags=re.IGNORECASE)
         timeline.append({
             "event": audit.event_type,
             "title": audit.title,
-            "description": audit.description,
+            "description": clean_desc,
             "timestamp": audit.created_at.isoformat() if audit.created_at else None
         })
 
@@ -536,7 +778,7 @@ def get_employee_application_detail(
             "module": "M10_ADAPTIVE_RAG",
             "compliance_score": None,
             "flags": [],
-            "notes": "Policy & Compliance Evaluation integrates with Module M10/M11."
+            "notes": "Policy & Compliance Evaluation reserved for Module M10/M11. Manual compliance review currently active."
         },
         "decision": {
             "status": app.status,
@@ -565,7 +807,7 @@ def transition_application_to_review(
     if str(app.user_id) == str(current_user.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Conflict of interest: Employees cannot review their own applications. Self-review is strictly forbidden under institutional governance rules."
+            detail="Conflict of interest: Employees cannot review their own applications. Self-review is strictly forbidden under governance rules."
         )
         
     if app.status == ApplicationStatus.DRAFT.value:
@@ -599,6 +841,127 @@ def transition_application_to_review(
     db.refresh(app)
     
     return get_employee_application_detail(application_id=app.id, current_user=current_user, db=db)
+
+
+@router.post("/applications/{application_id}/decision", response_model=ApplicationDecisionResponse)
+def decide_application(
+    application_id: UUID,
+    req: ApplicationDecisionRequest,
+    current_user: User = Depends(require_verified_employee),
+    db: Session = Depends(get_db)
+):
+    """
+    Final credit decisioning endpoint for an application under review:
+    - Status must be 'APPROVED' or 'DECLINED'
+    - Application must be in 'UNDER_REVIEW' status (rejects DRAFT, SUBMITTED, ADDITIONAL_INFO_REQUIRED, APPROVED, DECLINED)
+    - Enforces Conflict of Interest: Employees cannot decide on their own applications
+    - If APPROVED: Verifies that calculate_review_readiness has is_ready == True and 0 blockers
+    - If DECLINED: A meaningful reason is mandatory (non-empty, non-whitespace, not 'nil')
+    - Transactionally creates immutable audit event and customer notification
+    - Transitions to terminal state APPROVED or DECLINED
+    """
+    app = db.query(Application).filter(Application.id == application_id).first()
+    if not app:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found")
+
+    # Conflict of interest check (employees cannot review or decide their own applications)
+    check_employee_review_not_owner(current_user, str(app.user_id))
+
+    # Validate decision status
+    valid_decisions = [ApplicationStatus.APPROVED.value, ApplicationStatus.DECLINED.value]
+    clean_status = (req.status or "").strip().upper()
+    if clean_status not in valid_decisions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid decision status '{req.status}'. Final decision must be one of: {valid_decisions}."
+        )
+
+    # Validate current application state: final decision only allowed when UNDER_REVIEW
+    if app.status != ApplicationStatus.UNDER_REVIEW.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Application cannot be decided in '{app.status}' status. Final decisions can only be made on applications that are UNDER_REVIEW."
+        )
+
+    clean_notes = req.notes.strip() if req.notes else None
+
+    if clean_status == ApplicationStatus.APPROVED.value:
+        # Re-use existing review-readiness engine
+        readiness = calculate_review_readiness(app, db)
+        if not readiness["is_ready"] or len(readiness["blocking_reasons"]) > 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "message": "Application is not ready for final approval. All review readiness blockers must be resolved first.",
+                    "blocking_reasons": readiness["blocking_reasons"]
+                }
+            )
+
+        app.status = ApplicationStatus.APPROVED.value
+        app.updated_at = datetime.now(timezone.utc)
+
+        approval_desc = f"Loan application approved for {app.loan_type} (₹{app.requested_amount:,}) by credit officer {current_user.full_name or current_user.email}."
+        if clean_notes and clean_notes.lower() != "nil":
+            approval_desc += f" Note: {clean_notes}"
+
+        audit = ApplicationAuditEvent(
+            application_id=app.id,
+            user_id=current_user.id,
+            event_type="APPLICATION_APPROVED",
+            title="Application Approved",
+            description=approval_desc
+        )
+        db.add(audit)
+
+        notif = Notification(
+            user_id=app.user_id,
+            title="Loan Application Approved",
+            message=f"Congratulations! Your loan application for {app.loan_type} has been approved.",
+            type="STATUS_UPDATE",
+            related_entity_id=app.id
+        )
+        db.add(notif)
+
+    elif clean_status == ApplicationStatus.DECLINED.value:
+        # Mandatory meaningful reason
+        if not clean_notes or clean_notes.lower() == "nil":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A clear, meaningful rejection/deficiency reason is mandatory when declining an application."
+            )
+
+        app.status = ApplicationStatus.DECLINED.value
+        app.updated_at = datetime.now(timezone.utc)
+
+        audit = ApplicationAuditEvent(
+            application_id=app.id,
+            user_id=current_user.id,
+            event_type="APPLICATION_DECLINED",
+            title="Application Declined",
+            description=f"Loan application declined by {current_user.full_name or current_user.email}. Reason: {clean_notes}"
+        )
+        db.add(audit)
+
+        notif = Notification(
+            user_id=app.user_id,
+            title="Loan Application Declined",
+            message="Your loan application has been declined. Please review the application for available decision information.",
+            type="STATUS_UPDATE",
+            related_entity_id=app.id
+        )
+        db.add(notif)
+
+    db.commit()
+    db.refresh(app)
+
+    return ApplicationDecisionResponse(
+        id=str(app.id),
+        status=app.status,
+        decision=app.status,
+        notes=clean_notes,
+        updated_at=app.updated_at.isoformat() if app.updated_at else None,
+        message=f"Application successfully marked as {app.status}."
+    )
 
 
 @router.post("/documents/{document_id}/review")
@@ -637,7 +1000,8 @@ def review_document(
         )
 
     if req.status in [DocumentStatus.REQUIRES_REUPLOAD.value, DocumentStatus.REJECTED.value]:
-        if not req.reason or not req.reason.strip():
+        clean_req_reason = req.reason.strip() if req.reason else ""
+        if not clean_req_reason or clean_req_reason.lower() == "nil":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, 
                 detail="A clear reason is required when rejecting or requesting re-upload of a document."
@@ -646,25 +1010,43 @@ def review_document(
     doc.status = req.status
     doc.reviewed_by = current_user.id
     doc.reviewed_at = datetime.now(timezone.utc)
-    doc.review_notes = req.reason.strip() if req.reason else None
+    clean_notes = req.reason.strip() if (req.reason and req.reason.strip().lower() != "nil") else None
+    doc.review_notes = clean_notes
 
     # Persist audit event
     if doc.application_id:
+        if req.status in [DocumentStatus.REQUIRES_REUPLOAD.value, DocumentStatus.REJECTED.value]:
+            reason_text = clean_notes if clean_notes else "Reason not recorded"
+            desc = f"Document '{doc.document_type.replace('_', ' ')}' was marked as {req.status}. Reason: {reason_text}"
+        else:
+            reason_text = f" Reason: {clean_notes}" if clean_notes else ""
+            desc = f"Document '{doc.document_type.replace('_', ' ')}' was marked as {req.status}.{reason_text}".strip()
+
         audit_event = ApplicationAuditEvent(
             application_id=doc.application_id,
             user_id=current_user.id,
             event_type=f"DOCUMENT_{req.status}",
             title=f"Document {req.status.replace('_', ' ').title()}",
-            description=f"Document '{doc.document_type.replace('_', ' ')}' was marked as {req.status}. {f'Reason: {doc.review_notes}' if doc.review_notes else ''}".strip()
+            description=desc
         )
         db.add(audit_event)
 
+        # Invalidate review readiness if document is deficient or rejected
+        if req.status in [DocumentStatus.REQUIRES_REUPLOAD.value, DocumentStatus.REJECTED.value]:
+            app_to_check = db.query(Application).filter(Application.id == doc.application_id).first()
+            if app_to_check:
+                invalidate_review_readiness(
+                    app_to_check, db, current_user.id,
+                    f"Document '{doc.document_type.replace('_', ' ')}' marked as {req.status}."
+                )
+
     # Notify customer if re-upload is required
     if req.status in [DocumentStatus.REQUIRES_REUPLOAD.value, DocumentStatus.REJECTED.value] and doc.user_id:
+        notif_reason = doc.review_notes if doc.review_notes else "Reason not recorded"
         notif = Notification(
             user_id=doc.user_id,
             title="Document Review Action Required",
-            message=f"Your submitted document '{doc.document_type.replace('_', ' ')}' requires re-upload. Reason: {doc.review_notes}",
+            message=f"Your submitted document '{doc.document_type.replace('_', ' ')}' requires re-upload. Reason: {notif_reason}",
             type="ACTION_REQUIRED",
             related_entity_id=doc.application_id
         )
@@ -738,6 +1120,12 @@ def create_information_request(
     )
     db.add(audit)
 
+    # Invalidate review readiness
+    invalidate_review_readiness(
+        app, db, current_user.id,
+        f"Underwriting desk requested additional information: {req.title.strip()}."
+    )
+
     # Customer notification
     notif = Notification(
         user_id=app.user_id,
@@ -761,6 +1149,86 @@ def create_information_request(
         "status": info_req.status,
         "created_at": info_req.created_at.isoformat() if info_req.created_at else None,
         "application_status": app.status
+    }
+
+
+@router.post("/applications/{application_id}/information-requests/{request_id}/resolve")
+def resolve_information_request(
+    application_id: UUID,
+    request_id: UUID,
+    body: ResolveInformationRequestRequest = ResolveInformationRequestRequest(),
+    current_user: User = Depends(require_verified_employee),
+    db: Session = Depends(get_db)
+):
+    """
+    Resolves an information request after evaluating customer response.
+    Transitions request from RESPONDED (or OPEN) to RESOLVED.
+    If no other open or responded queries exist, transitions application back to UNDER_REVIEW.
+    Re-evaluates review readiness and logs an audit event.
+    """
+    app = db.query(Application).filter(Application.id == application_id).first()
+    if not app:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found")
+
+    if str(app.user_id) == str(current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Conflict of interest: Employees cannot review or resolve queries on their own applications."
+        )
+
+    info_req = db.query(AdditionalInformationRequest).filter(
+        AdditionalInformationRequest.id == request_id,
+        AdditionalInformationRequest.application_id == app.id
+    ).first()
+    if not info_req:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Information request not found")
+
+    if info_req.status == InformationRequestStatus.RESOLVED.value:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Information request is already resolved")
+
+    # Update status to RESOLVED
+    info_req.status = InformationRequestStatus.RESOLVED.value
+    info_req.resolved_at = datetime.now(timezone.utc)
+
+    # Check remaining open / responded queries
+    remaining_pending_requests = db.query(AdditionalInformationRequest).filter(
+        AdditionalInformationRequest.application_id == app.id,
+        AdditionalInformationRequest.id != info_req.id,
+        AdditionalInformationRequest.status.in_([
+            InformationRequestStatus.OPEN.value,
+            InformationRequestStatus.RESPONDED.value
+        ])
+    ).count()
+
+    if remaining_pending_requests == 0 and app.status == ApplicationStatus.ADDITIONAL_INFO_REQUIRED.value:
+        app.status = ApplicationStatus.UNDER_REVIEW.value
+        app.updated_at = datetime.now(timezone.utc)
+
+    # Audit event
+    notes_detail = f" Notes: {body.notes.strip()}" if body.notes and body.notes.strip() else ""
+    audit = ApplicationAuditEvent(
+        application_id=app.id,
+        user_id=current_user.id,
+        event_type="ADDITIONAL_INFO_RESOLVED",
+        title="Additional Information Request Resolved",
+        description=f"Underwriter resolved query '{info_req.title}'.{notes_detail}"
+    )
+    db.add(audit)
+
+    db.commit()
+    db.refresh(info_req)
+    db.refresh(app)
+
+    # Dynamically calculate review readiness
+    readiness = calculate_review_readiness(app, db)
+
+    return {
+        "id": str(info_req.id),
+        "application_id": str(info_req.application_id),
+        "status": info_req.status,
+        "resolved_at": info_req.resolved_at.isoformat() if info_req.resolved_at else None,
+        "application_status": app.status,
+        "readiness": readiness
     }
 
 
@@ -1008,7 +1476,7 @@ def get_compliance_workspace(
         "updated_at": app.updated_at.isoformat() if app.updated_at else None,
     }
 
-    documents = db.query(Document).filter(Document.application_id == app.id).all()
+    documents = db.query(Document).filter(Document.application_id == app.id).order_by(Document.created_at.desc()).all()
     docs_data = [
         {
             "id": str(doc.id),
@@ -1017,7 +1485,7 @@ def get_compliance_workspace(
             "status": doc.status,
             "reviewed_by": str(doc.reviewed_by) if doc.reviewed_by else None,
             "reviewed_at": doc.reviewed_at.isoformat() if doc.reviewed_at else None,
-            "review_notes": doc.review_notes,
+            "review_notes": ("Reason not recorded" if (doc.review_notes and doc.review_notes.strip().lower() in ["nil", "none"]) else doc.review_notes),
             "created_at": doc.created_at.isoformat() if doc.created_at else None,
             "updated_at": doc.updated_at.isoformat() if doc.updated_at else None
         }
@@ -1088,6 +1556,7 @@ def get_compliance_workspace(
             "response_notes": ir.response_notes,
             "created_at": ir.created_at.isoformat() if ir.created_at else None,
             "responded_at": ir.responded_at.isoformat() if ir.responded_at else None,
+            "resolved_at": ir.resolved_at.isoformat() if ir.resolved_at else None,
         }
         for ir in info_requests
     ]
@@ -1103,7 +1572,7 @@ def get_compliance_workspace(
             "id": str(ae.id),
             "event_type": ae.event_type,
             "title": ae.title,
-            "description": ae.description,
+            "description": re.sub(r'Reason:\s*(nil|none)\b', 'Reason: Reason not recorded', ae.description or "", flags=re.IGNORECASE),
             "user_id": str(ae.user_id) if ae.user_id else None,
             "created_at": ae.created_at.isoformat() if ae.created_at else None,
         }
@@ -1122,7 +1591,8 @@ def get_compliance_workspace(
             "status": "M10_RESERVED",
             "feature": "Adaptive RAG & Hybrid Retrieval",
             "message": "Regulatory policy vector search, BM25 indexing, evidence reranking, and automated policy cross-referencing are scheduled for Module M10. Manual compliance review workspace is currently active."
-        }
+        },
+        "readiness": calculate_review_readiness(app, db)
     }
 
 
@@ -1185,6 +1655,14 @@ def update_compliance_checklist_item(
         description=f"Checklist item '{item.title}' marked as {item.status} (was {old_status}) by {current_user.full_name or current_user.email}."
     )
     db.add(audit)
+
+    # Invalidate review readiness if item is set to PENDING or REQUIRES_INFORMATION
+    if item.status in [ComplianceChecklistStatus.PENDING.value, ComplianceChecklistStatus.REQUIRES_INFORMATION.value]:
+        invalidate_review_readiness(
+            app, db, current_user.id,
+            f"Checklist item '{item.title}' marked as {item.status}."
+        )
+
     db.commit()
     db.refresh(item)
 
@@ -1263,3 +1741,113 @@ def add_compliance_review_note(
         "note": new_note.note,
         "created_at": new_note.created_at.isoformat() if new_note.created_at else datetime.now(timezone.utc).isoformat(),
     }
+
+
+@router.get("/applications/{application_id}/review-readiness", response_model=ReviewReadinessResponse)
+def get_application_review_readiness(
+    application_id: UUID,
+    current_user: User = Depends(require_verified_employee),
+    db: Session = Depends(get_db)
+):
+    """
+    Returns current readiness evaluation, blocker list, and completed checks.
+    Enforces verified employee access, draft exclusion, and COI checks.
+    """
+    app = db.query(Application).filter(Application.id == application_id).first()
+    if not app:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    if app.status == ApplicationStatus.DRAFT.value:
+        raise HTTPException(
+            status_code=400,
+            detail="Draft applications cannot be evaluated for review readiness."
+        )
+
+    check_employee_review_not_owner(current_user, str(app.user_id))
+
+    return calculate_review_readiness(app, db)
+
+
+@router.post("/applications/{application_id}/review-readiness/mark-ready", response_model=ReviewReadinessResponse)
+def mark_application_review_ready(
+    application_id: UUID,
+    current_user: User = Depends(require_verified_employee),
+    db: Session = Depends(get_db)
+):
+    """
+    Transitions review readiness status to READY_FOR_COMPLIANCE_ASSESSMENT.
+    Rejects with 400 if any unresolved blockers exist.
+    Generates immutable COMPLIANCE_REVIEW_READY audit event.
+    """
+    app = db.query(Application).filter(Application.id == application_id).first()
+    if not app:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    if app.status == ApplicationStatus.DRAFT.value:
+        raise HTTPException(
+            status_code=400,
+            detail="Draft applications cannot be marked ready for compliance assessment."
+        )
+
+    check_employee_review_not_owner(current_user, str(app.user_id))
+
+    readiness = calculate_review_readiness(app, db)
+    if not readiness["is_ready"] or len(readiness["blocking_reasons"]) > 0:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Application is not ready for compliance assessment. All blockers must be resolved first.",
+                "blocking_reasons": readiness["blocking_reasons"]
+            }
+        )
+
+    app.review_readiness_status = ReviewReadinessState.READY_FOR_COMPLIANCE_ASSESSMENT.value
+    app.review_readiness_updated_at = datetime.now(timezone.utc)
+    app.review_readiness_updated_by = current_user.id
+
+    audit = ApplicationAuditEvent(
+        application_id=app.id,
+        user_id=current_user.id,
+        event_type="COMPLIANCE_REVIEW_READY",
+        title="Application Marked Ready for Compliance Assessment",
+        description=f"Application marked ready for compliance assessment by {current_user.full_name or current_user.email} after satisfying all prerequisite verifications."
+    )
+    db.add(audit)
+    db.commit()
+    db.refresh(app)
+
+    return calculate_review_readiness(app, db)
+
+
+@router.post("/applications/{application_id}/review-readiness/reset", response_model=ReviewReadinessResponse)
+def reset_application_review_readiness(
+    application_id: UUID,
+    body: ReviewReadinessResetRequest = ReviewReadinessResetRequest(),
+    current_user: User = Depends(require_verified_employee),
+    db: Session = Depends(get_db)
+):
+    """
+    Explicitly resets review readiness status back to PENDING_REVIEW_PREPARATION.
+    Logs COMPLIANCE_REVIEW_READINESS_RESET audit event.
+    """
+    app = db.query(Application).filter(Application.id == application_id).first()
+    if not app:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    if app.status == ApplicationStatus.DRAFT.value:
+        raise HTTPException(
+            status_code=400,
+            detail="Draft applications cannot be modified for review readiness."
+        )
+
+    check_employee_review_not_owner(current_user, str(app.user_id))
+
+    reason = body.reason.strip() if (body and body.reason and body.reason.strip()) else "Manual reset by compliance reviewer."
+
+    if getattr(app, "review_readiness_status", None) == ReviewReadinessState.READY_FOR_COMPLIANCE_ASSESSMENT.value:
+        invalidate_review_readiness(app, db, current_user.id, reason)
+        db.commit()
+        db.refresh(app)
+
+    return calculate_review_readiness(app, db)
+

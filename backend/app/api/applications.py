@@ -7,7 +7,7 @@ from uuid import UUID
 
 from app.db.session import get_db
 from app.core.security import get_current_user
-from app.db.models import User, Role, Application, ApplicationStatus, Document, AdditionalInformationRequest
+from app.db.models import User, Role, Application, ApplicationStatus, Document, AdditionalInformationRequest, ApplicationAuditEvent
 
 router = APIRouter()
 
@@ -129,7 +129,7 @@ def get_application(app_id: UUID, current_user: User = Depends(get_current_user)
     if not app:
         raise HTTPException(status_code=404, detail="Application not found")
     
-    docs = db.query(Document).filter(Document.application_id == app.id).all()
+    docs = db.query(Document).filter(Document.application_id == app.id).order_by(Document.created_at.desc()).all()
     
     docs_formatted = [
         DocumentItemResponse(
@@ -139,7 +139,7 @@ def get_application(app_id: UUID, current_user: User = Depends(get_current_user)
             file_url=f"/api/documents/{d.id}/content",
             status=d.status,
             reviewed_at=d.reviewed_at,
-            review_notes=d.review_notes,
+            review_notes=("Reason not recorded" if (d.review_notes and d.review_notes.strip().lower() in ["nil", "none"]) else d.review_notes),
             created_at=d.created_at
         )
         for d in docs
@@ -226,6 +226,14 @@ def submit_application(app_id: UUID, current_user: User = Depends(get_current_us
         raise HTTPException(status_code=400, detail="Application is not in DRAFT status")
         
     app.status = ApplicationStatus.SUBMITTED.value
+    audit = ApplicationAuditEvent(
+        application_id=app.id,
+        user_id=current_user.id,
+        event_type="APPLICATION_SUBMITTED",
+        title="Application Submitted",
+        description=f"Applicant completed and formally submitted the loan application for {app.loan_type} (₹{app.requested_amount:,})."
+    )
+    db.add(audit)
     db.commit()
     db.refresh(app)
     return app

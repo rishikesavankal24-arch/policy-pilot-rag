@@ -30,7 +30,7 @@ export default function EmployeeReportsPage() {
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-1">
-              Underwriting throughput, turnaround metrics, and statutory audit records
+              Underwriting throughput, turnaround metrics, and internal audit records
             </p>
           </div>
 
@@ -50,7 +50,7 @@ export default function EmployeeReportsPage() {
           <div className="p-4 bg-[#0F172A] border border-slate-800 rounded-xl">
             <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Average TAT</span>
             <p className="text-2xl font-bold text-white mt-1">2.4 Days</p>
-            <p className="text-[11px] text-emerald-400 mt-0.5">Within 3-day statutory target</p>
+            <p className="text-[11px] text-emerald-400 mt-0.5">Within 3-day internal target</p>
           </div>
 
           <div className="p-4 bg-[#0F172A] border border-slate-800 rounded-xl">
@@ -68,39 +68,39 @@ export default function EmployeeReportsPage() {
           <div className="p-4 bg-[#0F172A] border border-slate-800 rounded-xl">
             <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Audit Compliance</span>
             <p className="text-2xl font-bold text-blue-300 mt-1">100%</p>
-            <p className="text-[11px] text-blue-400 mt-0.5">Zero unlogged supervisor actions</p>
+            <p className="text-[11px] text-blue-400 mt-0.5">Zero unlogged officer actions</p>
           </div>
         </div>
 
-        {/* Regulatory Audit Trail Certification */}
+        {/* Internal Audit Trail Overview */}
         <div className="p-5 bg-[#0F172A] border border-slate-800 rounded-xl space-y-4">
           <div className="flex items-center gap-2 pb-3 border-b border-slate-800 text-slate-200">
             <ShieldCheck className="h-5 w-5 text-amber-400" />
             <div>
               <h2 className="text-xs font-bold uppercase tracking-wider">
-                Statutory Non-Repudiation Audit Certification
+                Internal Audit Trail Architecture
               </h2>
-              <p className="text-[11px] text-slate-400">Indian Evidence Act Section 65B Electronic Record Compliance</p>
+              <p className="text-[11px] text-slate-400">PolicyPilot Prototype Audit Logging & State Tracking</p>
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
             <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-lg space-y-1">
-              <span className="text-[10px] font-mono text-slate-400 uppercase">Cryptographic Hashes</span>
-              <p className="font-semibold text-slate-200">SHA-256 Audit Signing</p>
-              <p className="text-[11px] text-slate-500">All queue modifications signed with UTC timestamp</p>
+              <span className="text-[10px] font-mono text-slate-400 uppercase">Event Integrity</span>
+              <p className="font-semibold text-slate-200">Structured Audit Events</p>
+              <p className="text-[11px] text-slate-500">All workflow transitions recorded with UTC timestamps</p>
             </div>
 
             <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-lg space-y-1">
-              <span className="text-[10px] font-mono text-slate-400 uppercase">Data Retention</span>
-              <p className="font-semibold text-slate-200">8 Years Statutory</p>
-              <p className="text-[11px] text-slate-500">Stored in encrypted primary Indian bank vault</p>
+              <span className="text-[10px] font-mono text-slate-400 uppercase">Data Storage</span>
+              <p className="font-semibold text-slate-200">Relational Database</p>
+              <p className="text-[11px] text-slate-500">Indexed application event logs and history tables</p>
             </div>
 
             <div className="p-3 bg-slate-900/80 border border-slate-800 rounded-lg space-y-1">
               <span className="text-[10px] font-mono text-slate-400 uppercase">Inspection Logs</span>
               <p className="font-semibold text-emerald-400">Continuous Logging</p>
-              <p className="text-[11px] text-slate-500">Officer session IDs mapped to every case query</p>
+              <p className="text-[11px] text-slate-500">Officer IDs mapped to every document review and action</p>
             </div>
           </div>
         </div>

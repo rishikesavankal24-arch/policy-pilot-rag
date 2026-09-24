@@ -56,14 +56,14 @@ export default function EmployeeCompliancePage() {
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-xl font-bold tracking-tight text-white uppercase">
-                Regulatory Compliance Console
+                Policy Directives & Compliance Console
               </h1>
               <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-400/10 text-amber-400 border border-amber-400/30">
-                RBI FRAMEWORK 2024-25
+                RBI GUIDELINE REFERENCE 2024-25
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-1">
-              Institutional banking policies, statutory regulations, and automated compliance rules
+              Reference banking guidelines, regulatory directives, and policy review rules
             </p>
           </div>
 
@@ -84,25 +84,25 @@ export default function EmployeeCompliancePage() {
             <div className="flex items-center gap-2 text-blue-400">
               <ShieldCheck className="h-5 w-5" />
               <h2 className="text-sm font-bold uppercase tracking-wider text-white">
-                Automated Policy Evaluation Architecture
+                Policy Evaluation Architecture (Module M10/M11 Boundary)
               </h2>
             </div>
             <span className="text-[10px] font-mono font-bold bg-blue-500/10 text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded">
-              MODULE M10 / M11
+              RESERVED INTEGRATION BOUNDARY
             </span>
           </div>
           <p className="text-xs text-slate-300 leading-relaxed">
-            PolicyPilot incorporates an Adaptive RAG (Retrieval-Augmented Generation) intelligence layer to cross-reference customer loan applications against the latest RBI circulars and internal bank credit policies. Real-time compliance scoring, violation flags, and rule explanations are evaluated via Modules M10 & M11.
+            Automated compliance evaluation via Adaptive RAG (hybrid BM25/vector search, reranking, and automated policy cross-referencing) is scheduled for future implementation in <strong className="text-white">Module M10 & M11</strong>. Currently, all compliance checks and audit evaluations in this workspace operate under manual human officer review.
           </p>
           <div className="pt-2 flex flex-wrap items-center gap-3 text-[11px] font-mono text-slate-400">
             <span className="bg-slate-900 px-2 py-1 rounded border border-slate-800">
-              VECTOR REPOSITORY: RBI_CIRCULARS_V4
+              CURRENT MODE: MANUAL_OFFICER_REVIEW
             </span>
             <span className="bg-slate-900 px-2 py-1 rounded border border-slate-800">
-              EVALUATION ENGINE: ADAPTIVE_RAG_PIPELINE
+              AUTOMATED PIPELINE: SCHEDULED_FOR_M10
             </span>
             <span className="bg-slate-900 px-2 py-1 rounded border border-slate-800">
-              JURISDICTION: IN_CENTRAL_BANK
+              STATUS: INTEGRATION_BOUNDARY_ACTIVE
             </span>
           </div>
         </div>

@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { EmployeeLayout } from "@/components/layout/EmployeeLayout";
 import { useLanguage } from "@/i18n/LanguageContext";
+import { formatDateTime } from "@/lib/utils";
+import { getActiveSessionToken } from "@/lib/session";
 import { 
   ArrowLeft, 
   ShieldAlert, 
@@ -56,6 +58,17 @@ interface InformationRequestItem {
   response_notes: string | null;
   created_at: string | null;
   responded_at: string | null;
+  resolved_at?: string | null;
+}
+
+interface ReviewReadinessData {
+  application_id: string;
+  status: string;
+  is_ready: boolean;
+  can_mark_ready?: boolean;
+  blocking_reasons: string[];
+  completed_checks: string[];
+  pending_checks?: string[];
 }
 
 interface ApplicationDetailData {
@@ -122,6 +135,17 @@ export default function EmployeeApplicationDetailPage() {
   const [isStartingReview, setIsStartingReview] = useState(false);
   const [transitionError, setTransitionError] = useState<string | null>(null);
 
+  // Decision & Readiness State
+  const [readiness, setReadiness] = useState<ReviewReadinessData | null>(null);
+  const [isLoadingReadiness, setIsLoadingReadiness] = useState(false);
+  const [approveModalOpen, setApproveModalOpen] = useState(false);
+  const [declineModalOpen, setDeclineModalOpen] = useState(false);
+  const [declineReason, setDeclineReason] = useState("");
+  const [declineInputError, setDeclineInputError] = useState<string | null>(null);
+  const [decisionError, setDecisionError] = useState<string | null>(null);
+  const [decisionBlockers, setDecisionBlockers] = useState<string[]>([]);
+  const [isSubmittingDecision, setIsSubmittingDecision] = useState(false);
+
   // Document Review State
   const [reviewingDocId, setReviewingDocId] = useState<string | null>(null);
   const [docReviewModalOpen, setDocReviewModalOpen] = useState(false);
@@ -136,8 +160,48 @@ export default function EmployeeApplicationDetailPage() {
   const [infoRequestDesc, setInfoRequestDesc] = useState("");
   const [infoRequestDocType, setInfoRequestDocType] = useState("");
   const [isSubmittingInfoReq, setIsSubmittingInfoReq] = useState(false);
+  const [resolvingReqId, setResolvingReqId] = useState<string | null>(null);
   const [infoReqError, setInfoReqError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  const getHeaders = useCallback(() => {
+    const headers: Record<string, string> = {};
+    const token = getActiveSessionToken("/employee");
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+    return headers;
+  }, []);
+
+  const fetchReadiness = useCallback(async () => {
+    if (!id) return;
+    try {
+      setIsLoadingReadiness(true);
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+      const res = await fetch(`${apiUrl}/api/employee/applications/${id}/review-readiness`, {
+        headers: getHeaders(),
+        credentials: "include"
+      });
+
+      if (res.status === 400 || res.status === 404 || res.status === 403) {
+        setReadiness(null);
+        return;
+      }
+
+      if (!res.ok) {
+        setReadiness(null);
+        return;
+      }
+
+      const rData: ReviewReadinessData = await res.json();
+      setReadiness(rData);
+    } catch (e) {
+      console.error("Failed to fetch review readiness:", e);
+      setReadiness(null);
+    } finally {
+      setIsLoadingReadiness(false);
+    }
+  }, [id, getHeaders]);
 
   const fetchDetail = useCallback(async () => {
     if (!id) return;
@@ -148,6 +212,7 @@ export default function EmployeeApplicationDetailPage() {
 
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
       const res = await fetch(`${apiUrl}/api/employee/applications/${id}`, {
+        headers: getHeaders(),
         credentials: "include"
       });
 
@@ -162,7 +227,7 @@ export default function EmployeeApplicationDetailPage() {
       }
 
       if (res.status === 404) {
-        setGeneralError("Application not found in the institutional operations queue.");
+        setGeneralError("Application not found in the operational review queue.");
         return;
       }
 
@@ -183,11 +248,12 @@ export default function EmployeeApplicationDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, getHeaders]);
 
   useEffect(() => {
     fetchDetail();
-  }, [fetchDetail]);
+    fetchReadiness();
+  }, [fetchDetail, fetchReadiness]);
 
   const handleStartReview = async () => {
     if (!id) return;
@@ -197,6 +263,7 @@ export default function EmployeeApplicationDetailPage() {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
       const res = await fetch(`${apiUrl}/api/employee/applications/${id}/transition-review`, {
         method: "POST",
+        headers: getHeaders(),
         credentials: "include"
       });
       if (!res.ok) {
@@ -207,6 +274,7 @@ export default function EmployeeApplicationDetailPage() {
       setData(updated);
       setSuccessMessage("Underwriting review started successfully.");
       setTimeout(() => setSuccessMessage(null), 4000);
+      await fetchReadiness();
     } catch (err: any) {
       setTransitionError(err.message || "Failed to initiate underwriting review.");
     } finally {
@@ -254,6 +322,7 @@ export default function EmployeeApplicationDetailPage() {
       setSuccessMessage(`Document ${status === "ACCEPTED" ? "accepted" : "marked for re-upload"}.`);
       setTimeout(() => setSuccessMessage(null), 4000);
       await fetchDetail();
+      await fetchReadiness();
     } catch (err: any) {
       setDocReviewError(err.message || "Failed to review document.");
     } finally {
@@ -295,12 +364,109 @@ export default function EmployeeApplicationDetailPage() {
       setSuccessMessage("Information request sent to applicant. Application status updated to ADDITIONAL_INFO_REQUIRED.");
       setTimeout(() => setSuccessMessage(null), 5000);
       await fetchDetail();
+      await fetchReadiness();
     } catch (err: any) {
       setInfoReqError(err.message || "Failed to submit information request.");
     } finally {
       setIsSubmittingInfoReq(false);
     }
   };
+
+  const handleResolveInfoRequest = async (requestId: string, notes?: string) => {
+    try {
+      setResolvingReqId(requestId);
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+      const res = await fetch(`${apiUrl}/api/employee/applications/${id}/information-requests/${requestId}/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...getHeaders() },
+        credentials: "include",
+        body: JSON.stringify({ notes: notes || "Applicant response evaluated and marked resolved." })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `Failed to resolve information request (HTTP ${res.status})`);
+      }
+
+      setSuccessMessage("Information request resolved. Review readiness re-evaluated.");
+      setTimeout(() => setSuccessMessage(null), 5000);
+      await fetchDetail();
+      await fetchReadiness();
+    } catch (err: any) {
+      setTransitionError(err.message || "Failed to resolve information request.");
+      setTimeout(() => setTransitionError(null), 6000);
+    } finally {
+      setResolvingReqId(null);
+    }
+  };
+
+  const executeDecision = async (status: "APPROVED" | "DECLINED", notes?: string) => {
+    try {
+      setIsSubmittingDecision(true);
+      setDecisionError(null);
+      setDecisionBlockers([]);
+
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+      const res = await fetch(`${apiUrl}/api/employee/applications/${id}/decision`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...getHeaders(),
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          status,
+          notes: notes ? notes.trim() : undefined,
+        }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        if (errData.detail) {
+          if (typeof errData.detail === "object" && errData.detail !== null) {
+            const msg = errData.detail.message || "Application is not ready for final decision.";
+            const blockers = Array.isArray(errData.detail.blocking_reasons) ? errData.detail.blocking_reasons : [];
+            setDecisionError(msg);
+            setDecisionBlockers(blockers);
+          } else {
+            setDecisionError(String(errData.detail));
+          }
+        } else {
+          setDecisionError(`Failed to record decision (HTTP ${res.status})`);
+        }
+        // If approving and blockers exist, close confirmation modal so blockers are visible in workspace
+        if (status === "APPROVED") {
+          setApproveModalOpen(false);
+        }
+        await fetchDetail();
+        await fetchReadiness();
+        return;
+      }
+
+      const result = await res.json();
+      setApproveModalOpen(false);
+      setDeclineModalOpen(false);
+      setDeclineReason("");
+      setDeclineInputError(null);
+      setSuccessMessage(result.message || `Application successfully ${status.toLowerCase()}.`);
+      setTimeout(() => setSuccessMessage(null), 5000);
+      await fetchDetail();
+      await fetchReadiness();
+    } catch (err: any) {
+      setDecisionError(err.message || "Network error while submitting decision.");
+      await fetchDetail();
+      await fetchReadiness();
+    } finally {
+      setIsSubmittingDecision(false);
+    }
+  };
+
+  const sortedDocuments = useMemo(() => {
+    if (!data?.documents) return [];
+    return [...data.documents].sort(
+      (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+    );
+  }, [data?.documents]);
 
   const formatINR = (val: number) => {
     return new Intl.NumberFormat("en-IN", {
@@ -446,9 +612,9 @@ export default function EmployeeApplicationDetailPage() {
                     </span>
                   </div>
                   <p className="text-xs text-slate-400 mt-1 font-mono">
-                    CASE ID: {data.application.id} • SUBMITTED: {data.application.created_at ? new Date(data.application.created_at).toLocaleString() : "N/A"}
+                    CASE ID: {data.application.id} • SUBMITTED: {formatDateTime(data.application.created_at)}
                     {data.application.updated_at && (
-                      <span> • LAST UPDATED: {new Date(data.application.updated_at).toLocaleString()}</span>
+                      <span> • LAST UPDATED: {formatDateTime(data.application.updated_at)}</span>
                     )}
                   </p>
                 </div>
@@ -504,6 +670,20 @@ export default function EmployeeApplicationDetailPage() {
                         <span>{data.application.status === "ADDITIONAL_INFO_REQUIRED" ? "Awaiting Applicant Info" : "Review in Progress"}</span>
                       </span>
                     </>
+                  )}
+
+                  {data.application.status === "APPROVED" && (
+                    <span className="px-3 py-1.5 rounded-lg bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 text-xs font-semibold flex items-center gap-1.5">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                      <span>Decision: Approved</span>
+                    </span>
+                  )}
+
+                  {data.application.status === "DECLINED" && (
+                    <span className="px-3 py-1.5 rounded-lg bg-rose-950/80 text-rose-300 border border-rose-500/40 text-xs font-semibold flex items-center gap-1.5">
+                      <XCircle className="h-3.5 w-3.5 text-rose-400" />
+                      <span>Decision: Declined</span>
+                    </span>
                   )}
                 </div>
               </div>
@@ -591,19 +771,24 @@ export default function EmployeeApplicationDetailPage() {
 
             {/* Document Evidence Repository with Underwriting Review Actions */}
             <div className="bg-[#0F172A] border border-slate-800 rounded-xl overflow-hidden shadow-sm">
-              <div className="px-5 py-3.5 bg-[#070D1E] border-b border-slate-800 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <FolderCheck className="h-4 w-4 text-amber-400" />
-                  <h2 className="text-xs font-bold uppercase tracking-wider text-slate-200">
-                    Applicant Submitted Documents ({data.documents.length})
-                  </h2>
+              <div className="px-5 py-3.5 bg-[#070D1E] border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-start gap-2.5">
+                  <FolderCheck className="h-4 w-4 text-amber-400 mt-0.5" />
+                  <div>
+                    <h2 className="text-xs font-bold uppercase tracking-wider text-slate-200">
+                      Document Review ({data.documents.length} Submitted)
+                    </h2>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      Use Require Re-upload only when an existing submitted document needs replacement or correction.
+                    </p>
+                  </div>
                 </div>
-                <span className="text-[11px] font-mono text-slate-400">
-                  DOCUMENT REVIEW & RE-UPLOAD GOVERNANCE
+                <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider">
+                  EXISTING SUBMITTED EVIDENCE
                 </span>
               </div>
 
-              {data.documents.length === 0 ? (
+              {sortedDocuments.length === 0 ? (
                 <div className="p-8 text-center text-slate-500 text-xs">
                   No supporting documents currently uploaded by the applicant for this loan case.
                 </div>
@@ -614,13 +799,13 @@ export default function EmployeeApplicationDetailPage() {
                       <tr>
                         <th className="px-4 py-2.5">Document Details</th>
                         <th className="px-4 py-2.5">Status</th>
-                        <th className="px-4 py-2.5">Upload Date</th>
+                        <th className="px-4 py-2.5">Upload & Review</th>
                         <th className="px-4 py-2.5">Review Notes</th>
                         <th className="px-4 py-2.5 text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/80">
-                      {data.documents.map((doc) => {
+                      {sortedDocuments.map((doc) => {
                         const canReview = ["SUBMITTED", "UNDER_REVIEW", "ADDITIONAL_INFO_REQUIRED"].includes(data.application.status);
                         const isDocReviewing = reviewingDocId === doc.id;
 
@@ -636,15 +821,22 @@ export default function EmployeeApplicationDetailPage() {
                               </span>
                             </td>
                             <td className="px-4 py-3 text-slate-400 font-mono text-[11px]">
-                              {doc.created_at ? new Date(doc.created_at).toLocaleDateString() : "N/A"}
+                              <div>Uploaded: {formatDateTime(doc.created_at)}</div>
+                              {doc.reviewed_at && (
+                                <div className="text-emerald-400/90 text-[10px] mt-0.5">
+                                  Reviewed: {formatDateTime(doc.reviewed_at)}
+                                </div>
+                              )}
                             </td>
                             <td className="px-4 py-3 text-slate-300 text-[11px] max-w-xs">
-                              {doc.review_notes ? (
+                              {doc.review_notes && !["nil", "none"].includes(doc.review_notes.trim().toLowerCase()) ? (
                                 <div className="p-1.5 rounded bg-slate-900/80 border border-slate-800 text-amber-200/90 text-[11px]">
                                   {doc.review_notes}
                                 </div>
                               ) : (
-                                <span className="text-slate-500 italic">No notes recorded</span>
+                                <span className="text-slate-500 italic">
+                                  {doc.status === "REQUIRES_REUPLOAD" || doc.status === "REJECTED" ? "Reason not recorded" : "No notes recorded"}
+                                </span>
                               )}
                             </td>
                             <td className="px-4 py-3 text-right">
@@ -696,18 +888,23 @@ export default function EmployeeApplicationDetailPage() {
 
             {/* Information Requests Workspace */}
             <div className="bg-[#0F172A] border border-slate-800 rounded-xl overflow-hidden shadow-sm">
-              <div className="px-5 py-3.5 bg-[#070D1E] border-b border-slate-800 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <MessageSquare className="h-4 w-4 text-amber-400" />
-                  <h2 className="text-xs font-bold uppercase tracking-wider text-slate-200">
-                    Additional Information Requests ({data.information_requests ? data.information_requests.length : 0})
-                  </h2>
+              <div className="px-5 py-3.5 bg-[#070D1E] border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-start gap-2.5">
+                  <MessageSquare className="h-4 w-4 text-blue-400 mt-0.5" />
+                  <div>
+                    <h2 className="text-xs font-bold uppercase tracking-wider text-slate-200">
+                      Additional Information ({data.information_requests ? data.information_requests.length : 0})
+                    </h2>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      Use this when new information, clarification, or a document that was not previously submitted is required.
+                    </p>
+                  </div>
                 </div>
                 
                 {(data.application.status === "UNDER_REVIEW" || data.application.status === "ADDITIONAL_INFO_REQUIRED") && (
                   <button
                     onClick={() => setInfoRequestModalOpen(true)}
-                    className="inline-flex items-center gap-1 text-xs font-semibold text-amber-400 hover:text-amber-300"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs rounded-lg transition-colors shadow-sm shrink-0"
                   >
                     <span>+ New Query</span>
                   </button>
@@ -722,6 +919,7 @@ export default function EmployeeApplicationDetailPage() {
                 <div className="divide-y divide-slate-800/80">
                   {data.information_requests.map((req) => {
                     const isResponded = req.status === "RESPONDED";
+                    const isResolved = req.status === "RESOLVED";
 
                     return (
                       <div key={req.id} className="p-4 hover:bg-slate-800/30 transition-colors space-y-2">
@@ -729,10 +927,15 @@ export default function EmployeeApplicationDetailPage() {
                           <div>
                             <div className="flex items-center gap-2">
                               <h3 className="text-xs font-bold text-slate-200">{req.title}</h3>
-                              {isResponded ? (
+                              {isResolved ? (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-emerald-400 border border-slate-700 flex items-center gap-1">
+                                  <CheckCircle2 className="h-3 w-3" />
+                                  <span>RESOLVED</span>
+                                </span>
+                              ) : isResponded ? (
                                 <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-500/50 flex items-center gap-1">
                                   <CheckCircle2 className="h-3 w-3" />
-                                  <span>NEW DOCUMENT RECEIVED</span>
+                                  <span>CUSTOMER RESPONDED — REVIEW REQUIRED</span>
                                 </span>
                               ) : (
                                 <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-950/80 text-amber-300 border border-amber-500/50">
@@ -750,37 +953,82 @@ export default function EmployeeApplicationDetailPage() {
 
                           <div className="text-right shrink-0">
                             <span className="text-[10px] text-slate-500 font-mono block">
-                              Requested: {req.created_at ? new Date(req.created_at).toLocaleDateString() : "N/A"}
+                              Requested: {formatDateTime(req.created_at)}
                             </span>
                             {req.responded_at && (
                               <span className="text-[10px] text-emerald-400 font-mono block mt-0.5">
-                                Responded: {new Date(req.responded_at).toLocaleString()}
+                                Responded: {formatDateTime(req.responded_at)}
+                              </span>
+                            )}
+                            {req.resolved_at && (
+                              <span className="text-[10px] text-slate-400 font-mono block mt-0.5">
+                                Resolved: {formatDateTime(req.resolved_at)}
                               </span>
                             )}
                           </div>
                         </div>
 
-                        {/* Customer Response Box */}
+                        {/* Customer Response Box with Resolve Action */}
                         {isResponded && (
-                          <div className="mt-2 p-3 rounded-lg bg-emerald-950/20 border border-emerald-500/30 flex items-center justify-between gap-4">
+                          <div className="mt-2 p-3 rounded-lg bg-emerald-950/20 border border-emerald-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                             <div className="space-y-0.5">
                               <span className="text-[10px] uppercase font-mono text-emerald-400 font-bold block">
-                                Customer Response Notes:
+                                Customer Response:
                               </span>
                               <p className="text-xs text-slate-200">
                                 {req.response_notes || "Document submitted without supplementary notes."}
                               </p>
                             </div>
 
+                            <div className="flex items-center gap-2 shrink-0">
+                              {req.response_document_id && (
+                                <a
+                                  href={`${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/documents/${req.response_document_id}/content`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-xs font-semibold inline-flex items-center gap-1.5 border border-slate-700 transition-colors shadow-sm"
+                                >
+                                  <ExternalLink className="h-3 w-3" />
+                                  <span>View Response File</span>
+                                </a>
+                              )}
+
+                              <button
+                                onClick={() => handleResolveInfoRequest(req.id)}
+                                disabled={resolvingReqId === req.id}
+                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-800/50 text-white rounded text-xs font-semibold inline-flex items-center gap-1.5 transition-colors shadow-sm cursor-pointer disabled:cursor-not-allowed"
+                              >
+                                {resolvingReqId === req.id ? (
+                                  <>
+                                    <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                    <span>Resolving...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <CheckCircle2 className="h-3.5 w-3.5" />
+                                    <span>Resolve Query</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {isResolved && (
+                          <div className="mt-2 p-2.5 rounded-lg bg-slate-900/60 border border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
+                            <div className="flex items-center gap-1.5 text-emerald-400">
+                              <CheckCircle2 className="h-3.5 w-3.5" />
+                              <span className="font-semibold text-slate-300">Query Resolved</span>
+                            </div>
                             {req.response_document_id && (
                               <a
                                 href={`${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"}/api/documents/${req.response_document_id}/content`}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-semibold inline-flex items-center gap-1.5 transition-colors shadow-sm shrink-0"
+                                className="text-[11px] text-slate-400 hover:text-white inline-flex items-center gap-1"
                               >
-                                <ExternalLink className="h-3 w-3" />
-                                <span>View Uploaded File</span>
+                                <span>View Response File</span>
+                                <ExternalLink className="h-2.5 w-2.5" />
                               </a>
                             )}
                           </div>
@@ -804,9 +1052,11 @@ export default function EmployeeApplicationDetailPage() {
                   <div key={idx} className="relative">
                     <div className="absolute -left-[21px] top-0.5 w-3 h-3 rounded-full bg-amber-500 border-2 border-[#0F172A]"></div>
                     <p className="text-xs font-bold text-slate-200">{item.title}</p>
-                    <p className="text-[11px] text-slate-400 mt-0.5">{item.description}</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      {item.description ? item.description.replace(/Reason:\s*(nil|none)\b/gi, "Reason: Reason not recorded") : ""}
+                    </p>
                     <span className="text-[10px] text-slate-500 font-mono block mt-1">
-                      {item.timestamp ? new Date(item.timestamp).toLocaleString() : "Date recorded"}
+                      {formatDateTime(item.timestamp)}
                     </span>
                   </div>
                 ))}
@@ -826,14 +1076,14 @@ export default function EmployeeApplicationDetailPage() {
                     </h3>
                   </div>
                   <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400">
-                    {data.compliance.module}
+                    {data.compliance.module === "M10_ADAPTIVE_RAG" ? "M10 Integration Boundary (Reserved)" : data.compliance.module}
                   </span>
                 </div>
                 <p className="text-xs text-slate-400 leading-relaxed">
                   {data.compliance.notes}
                 </p>
                 <div className="p-2.5 rounded bg-[#0A1224] border border-slate-800 text-[11px] text-slate-500 font-mono">
-                  Integration status: {data.compliance.status}
+                  Integration status: {data.compliance.status} (Reserved Boundary)
                 </div>
                 <div>
                   <Link
@@ -846,25 +1096,211 @@ export default function EmployeeApplicationDetailPage() {
                 </div>
               </div>
 
-              {/* Credit Decisioning Boundary */}
-              <div className="bg-[#0F172A] border border-slate-800 rounded-xl p-5 shadow-sm space-y-3">
+              {/* Underwriting Decision Workspace */}
+              <div className="bg-[#0F172A] border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
                 <div className="flex items-center justify-between pb-3 border-b border-slate-800">
                   <div className="flex items-center gap-2">
-                    <Layers className="h-4 w-4 text-slate-400" />
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                    <Layers className="h-4 w-4 text-amber-400" />
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200">
                       Underwriting Decision
                     </h3>
                   </div>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400">
-                    {data.decision.module}
+                  <span className={`text-[10px] font-mono px-2 py-0.5 rounded border ${getStatusBadge(data.application.status)}`}>
+                    Status: {data.application.status}
                   </span>
                 </div>
-                <p className="text-xs text-slate-400 leading-relaxed">
-                  {data.decision.notes}
-                </p>
-                <div className="p-2.5 rounded bg-[#0A1224] border border-slate-800 text-[11px] text-slate-500 font-mono">
-                  Autonomous deciders: DISABLED • Human Underwriter Assigned
+
+                {/* Decision Error Alert */}
+                {decisionError && (
+                  <div className="p-3.5 rounded-lg bg-rose-950/60 border border-rose-600/40 text-rose-200 text-xs space-y-2 animate-in fade-in duration-150">
+                    <div className="flex items-center gap-2 font-bold text-rose-100">
+                      <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0" />
+                      <span>Decision Rejected</span>
+                    </div>
+                    <p className="text-xs text-rose-200">{decisionError}</p>
+                    {decisionBlockers.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-rose-800/40">
+                        <span className="text-[10px] uppercase font-bold text-rose-300 block mb-1">
+                          Readiness Blockers:
+                        </span>
+                        <ul className="list-disc list-inside space-y-1 text-[11px] text-rose-200/90 pl-1 font-mono">
+                          {decisionBlockers.map((blocker, bIdx) => (
+                            <li key={bIdx}>{blocker}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Review Readiness Status Display */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-slate-400 font-semibold uppercase tracking-wider">
+                      Review Readiness Evaluation
+                    </span>
+                    {isLoadingReadiness && (
+                      <span className="text-slate-500 font-mono text-[10px] flex items-center gap-1">
+                        <div className="w-2.5 h-2.5 border border-slate-400 border-t-transparent rounded-full animate-spin"></div>
+                        Evaluating...
+                      </span>
+                    )}
+                  </div>
+
+                  {readiness ? (
+                    readiness.is_ready ? (
+                      <div className="p-3 rounded-lg bg-emerald-950/40 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2.5">
+                        <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                        <div>
+                          <span className="font-bold text-emerald-200 block">Ready for final decision</span>
+                          <span className="text-[11px] text-emerald-400/80">
+                            All compliance checks, document requirements, and information queries are satisfied.
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-3.5 rounded-lg bg-amber-950/30 border border-amber-500/30 text-xs space-y-2">
+                        <div className="flex items-center gap-2 text-amber-300 font-bold">
+                          <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
+                          <span>Not ready for approval</span>
+                        </div>
+                        <p className="text-[11px] text-slate-300 leading-relaxed">
+                          Approval is currently blocked. The following requirements must be resolved prior to final authorization:
+                        </p>
+                        {readiness.blocking_reasons && readiness.blocking_reasons.length > 0 && (
+                          <ul className="list-disc list-inside space-y-1 text-[11px] text-amber-200/90 pl-1 font-mono">
+                            {readiness.blocking_reasons.map((reason, idx) => (
+                              <li key={idx}>{reason}</li>
+                            ))}
+                          </ul>
+                        )}
+                        <div className="pt-2">
+                          <Link
+                            href={`/employee/applications/${data.application.id}/compliance`}
+                            className="inline-flex items-center gap-1 text-[11px] text-amber-400 hover:text-amber-300 font-semibold underline underline-offset-2"
+                          >
+                            Resolve blockers in Compliance Workspace &rarr;
+                          </Link>
+                        </div>
+                      </div>
+                    )
+                  ) : !isLoadingReadiness && data.application.status !== "DRAFT" ? (
+                    <div className="p-2.5 rounded bg-slate-900 border border-slate-800 text-[11px] text-slate-400">
+                      Readiness evaluation will update once review data is verified.
+                    </div>
+                  ) : null}
                 </div>
+
+                {/* State-specific Decision Workspace */}
+                {data.application.status === "APPROVED" && (
+                  <div className="p-4 rounded-xl bg-emerald-950/60 border border-emerald-500/50 text-emerald-200 text-xs space-y-1 shadow-sm">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0" />
+                      <span className="font-bold text-sm text-emerald-100 uppercase tracking-wide">
+                        Final Decision: APPROVED
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-emerald-300/80 pl-7 leading-relaxed">
+                      This application has been formally approved by an authorized credit officer. The final decision is committed and immutable.
+                    </p>
+                  </div>
+                )}
+
+                {data.application.status === "DECLINED" && (
+                  <div className="p-4 rounded-xl bg-rose-950/60 border border-rose-500/50 text-rose-200 text-xs space-y-1 shadow-sm">
+                    <div className="flex items-center gap-2">
+                      <XCircle className="h-5 w-5 text-rose-400 shrink-0" />
+                      <span className="font-bold text-sm text-rose-100 uppercase tracking-wide">
+                        Final Decision: DECLINED
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-rose-300/80 pl-7 leading-relaxed">
+                      This application has been declined. The final underwriting decision is recorded in the operational audit trail and locked against further modification.
+                    </p>
+                  </div>
+                )}
+
+                {data.application.status === "ADDITIONAL_INFO_REQUIRED" && (
+                  <div className="p-3.5 rounded-lg bg-blue-950/40 border border-blue-500/40 text-blue-200 text-xs space-y-2">
+                    <div className="flex items-center gap-2 text-blue-300 font-bold">
+                      <Clock className="h-4 w-4 text-blue-400 shrink-0" />
+                      <span>Additional Information Required</span>
+                    </div>
+                    <p className="text-[11px] text-slate-300 leading-relaxed">
+                      Final approval cannot proceed while customer information requests remain outstanding. Use the Information Requests section above to review responses and mark them resolved. Once all queries are resolved, the application will return to review status.
+                    </p>
+                  </div>
+                )}
+
+                {data.application.status === "SUBMITTED" && (
+                  <div className="p-3 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-400 space-y-2">
+                    <p className="text-[11px]">
+                      This application has not yet been placed under formal underwriting evaluation. Initiate review before recording a final decision.
+                    </p>
+                  </div>
+                )}
+
+                {data.application.status === "UNDER_REVIEW" && (
+                  <div className="pt-2 border-t border-slate-800 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider">
+                        Available Underwriter Actions
+                      </span>
+                      <span className="text-[10px] font-mono text-slate-500">
+                        Operational Authority: Active
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <button
+                        id="approve-application-btn"
+                        type="button"
+                        onClick={() => {
+                          setDecisionError(null);
+                          setDecisionBlockers([]);
+                          setApproveModalOpen(true);
+                        }}
+                        disabled={!readiness?.is_ready || isSubmittingDecision}
+                        className={`w-full py-2.5 px-4 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                          readiness?.is_ready && !isSubmittingDecision
+                            ? "bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-950 cursor-pointer"
+                            : "bg-slate-800 text-slate-500 border border-slate-700/50 cursor-not-allowed"
+                        }`}
+                        title={
+                          !readiness?.is_ready
+                            ? "Approval disabled: Resolve review readiness blockers before approving."
+                            : "Approve application"
+                        }
+                      >
+                        <CheckCircle2 className="h-4 w-4" />
+                        <span>Approve Application</span>
+                      </button>
+
+                      <button
+                        id="decline-application-btn"
+                        type="button"
+                        onClick={() => {
+                          setDecisionError(null);
+                          setDecisionBlockers([]);
+                          setDeclineReason("");
+                          setDeclineInputError(null);
+                          setDeclineModalOpen(true);
+                        }}
+                        disabled={isSubmittingDecision}
+                        className="w-full py-2.5 px-4 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 hover:text-white border border-rose-500/40 text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <XCircle className="h-4 w-4 text-rose-400" />
+                        <span>Decline Application</span>
+                      </button>
+                    </div>
+
+                    {!readiness?.is_ready && (
+                      <p className="text-[11px] text-slate-500 italic">
+                        Note: Final approval is disabled until all review readiness criteria are satisfied. Decline remains accessible with a mandatory justification.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
 
             </div>
@@ -1027,6 +1463,202 @@ export default function EmployeeApplicationDetailPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Confirm Underwriting Approval */}
+      {approveModalOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+          <div className="bg-[#0F172A] border border-slate-800 rounded-xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2 text-emerald-400">
+                <CheckCircle2 className="h-5 w-5" />
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                  Confirm Underwriting Approval
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setApproveModalOpen(false)}
+                disabled={isSubmittingDecision}
+                className="text-slate-400 hover:text-white text-xs disabled:opacity-50"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="p-3 rounded-lg bg-emerald-950/40 border border-emerald-500/30 text-xs text-emerald-200 space-y-1">
+                <p className="font-semibold text-white">
+                  Application #{data?.application.id.slice(0, 8)} • {data?.applicant.full_name}
+                </p>
+                <p className="text-[11px] text-emerald-300/90 font-mono">
+                  Facility: {formatINR(data?.application.requested_amount || 0)} ({data?.application.loan_type})
+                </p>
+              </div>
+
+              <p className="text-xs text-slate-300 leading-relaxed">
+                You are about to record a <span className="text-emerald-400 font-bold">FINAL APPROVAL</span> decision for this loan application.
+              </p>
+
+              <div className="p-3 rounded bg-[#0A1224] border border-slate-800 text-[11px] text-slate-400 space-y-1.5">
+                <p className="font-semibold text-slate-300">Underwriting Confirmation Policy:</p>
+                <ul className="list-disc list-inside space-y-1 text-slate-400">
+                  <li>This approval decision is permanent and cannot be reversed from the operations console.</li>
+                  <li>All checklist evaluations, identity verifications, and readiness blockers have been validated.</li>
+                  <li>The applicant will receive an automated notification regarding the approval status.</li>
+                </ul>
+              </div>
+
+              {decisionError && (
+                <div className="p-3 rounded bg-rose-950/60 border border-rose-600/40 text-rose-200 text-xs">
+                  {decisionError}
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setApproveModalOpen(false)}
+                disabled={isSubmittingDecision}
+                className="px-3.5 py-2 text-xs text-slate-400 hover:text-white disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                id="confirm-approval-submit-btn"
+                onClick={() => executeDecision("APPROVED")}
+                disabled={isSubmittingDecision}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-700/50 text-white rounded-lg text-xs font-bold transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
+              >
+                {isSubmittingDecision ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span>Processing Approval...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="h-4 w-4" />
+                    <span>Confirm Final Approval</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Decline Loan Application */}
+      {declineModalOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+          <div className="bg-[#0F172A] border border-slate-800 rounded-xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2 text-rose-400">
+                <XCircle className="h-5 w-5" />
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                  Decline Loan Application
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setDeclineModalOpen(false);
+                  setDeclineReason("");
+                  setDeclineInputError(null);
+                }}
+                disabled={isSubmittingDecision}
+                className="text-slate-400 hover:text-white text-xs disabled:opacity-50"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Recording a <span className="text-rose-400 font-bold">FINAL DECLINE</span> decision is permanent. A detailed deficiency or rejection reason is mandatory.
+              </p>
+
+              {declineInputError && (
+                <div className="p-2.5 rounded bg-rose-950/60 border border-rose-600/40 text-rose-200 text-xs">
+                  {declineInputError}
+                </div>
+              )}
+
+              {decisionError && (
+                <div className="p-3 rounded bg-rose-950/60 border border-rose-600/40 text-rose-200 text-xs">
+                  {decisionError}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Decline Reason / Decision Notes <span className="text-rose-400">*</span>
+                </label>
+                <textarea
+                  id="decline-reason-textarea"
+                  value={declineReason}
+                  onChange={(e) => {
+                    setDeclineReason(e.target.value);
+                    if (declineInputError) setDeclineInputError(null);
+                  }}
+                  placeholder="e.g. Applicant debt-to-income ratio exceeds institutional thresholds and credit score is below facility underwriting criteria..."
+                  rows={4}
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-400 leading-relaxed"
+                  required
+                />
+                <span className="text-[10px] text-slate-500 mt-1 block">
+                  Mandatory: Cannot be empty, whitespace-only, or &ldquo;nil&rdquo;. Recorded in audit log.
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setDeclineModalOpen(false);
+                  setDeclineReason("");
+                  setDeclineInputError(null);
+                }}
+                disabled={isSubmittingDecision}
+                className="px-3.5 py-2 text-xs text-slate-400 hover:text-white disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                id="submit-decline-btn"
+                onClick={() => {
+                  const trimmed = declineReason.trim();
+                  if (!trimmed) {
+                    setDeclineInputError("A decline reason is mandatory.");
+                    return;
+                  }
+                  if (trimmed.toLowerCase() === "nil") {
+                    setDeclineInputError("Please provide a meaningful explanation. 'nil' is not an acceptable reason.");
+                    return;
+                  }
+                  executeDecision("DECLINED", trimmed);
+                }}
+                disabled={isSubmittingDecision || !declineReason.trim() || declineReason.trim().toLowerCase() === "nil"}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-500 disabled:bg-rose-800/40 text-white rounded-lg text-xs font-bold transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
+              >
+                {isSubmittingDecision ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span>Submitting Decline...</span>
+                  </>
+                ) : (
+                  <>
+                    <XCircle className="h-4 w-4" />
+                    <span>Submit Decline</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

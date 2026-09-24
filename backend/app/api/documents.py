@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import uuid
 import os
@@ -22,7 +22,8 @@ from app.db.models import (
     Application, 
     OnboardingStatus,
     EmployeeRequest, 
-    EmployeeRequestStatus
+    EmployeeRequestStatus,
+    ApplicationAuditEvent
 )
 
 router = APIRouter()
@@ -44,9 +45,21 @@ def sanitize_filename(filename: str) -> str:
 
 def resolve_document_file_path(doc: Document) -> Optional[Path]:
     """Locate the stored document file on disk within the document's dedicated storage directory."""
+    # 1. First priority: Check direct resolution from doc.file_url (handles canonical and historical subfolders)
+    if doc.file_url:
+        clean_rel = doc.file_url.strip().replace("\\", "/").lstrip("/")
+        if clean_rel.startswith("documents/"):
+            clean_rel = clean_rel[len("documents/"):]
+        candidate_from_url = (STORAGE_DIR / clean_rel).resolve()
+        try:
+            candidate_from_url.relative_to(STORAGE_DIR)
+            if candidate_from_url.exists() and candidate_from_url.is_file():
+                return candidate_from_url
+        except ValueError:
+            pass
+
+    # 2. Second priority: Look inside the document's dedicated storage directory by doc.id
     doc_folder = (STORAGE_DIR / str(doc.id)).resolve()
-    
-    # Path traversal protection: Ensure doc_folder is strictly inside STORAGE_DIR
     try:
         doc_folder.relative_to(STORAGE_DIR)
     except ValueError:
@@ -70,8 +83,9 @@ def resolve_document_file_path(doc: Document) -> Optional[Path]:
         except ValueError:
             pass
             
-    # Return the first available file in the document directory
-    first_file = files[0].resolve()
+    # Return the most recently modified file in the document directory
+    files_by_mtime = sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)
+    first_file = files_by_mtime[0].resolve()
     try:
         first_file.relative_to(STORAGE_DIR)
         return first_file
@@ -115,6 +129,7 @@ def get_documents(current_user: User = Depends(get_current_user), db: Session = 
 def upload_document(
     document_type: str = Form(...),
     application_id: Optional[UUID] = Form(None),
+    replaces_document_id: Optional[UUID] = Form(None),
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user), 
     db: Session = Depends(get_db)
@@ -127,11 +142,55 @@ def upload_document(
         if not app:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found or unauthorized")
 
-    doc_id = uuid.uuid4()
+    # Check if this upload replaces an existing deficient document
+    target_doc = None
+    if replaces_document_id:
+        existing_doc = db.query(Document).filter(Document.id == replaces_document_id).first()
+        if not existing_doc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, 
+                detail="Document to replace not found."
+            )
+        if existing_doc.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, 
+                detail="Unauthorized: Cannot replace a document belonging to another user."
+            )
+        if application_id and existing_doc.application_id and existing_doc.application_id != application_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, 
+                detail="Document does not belong to the specified application."
+            )
+        if existing_doc.status != DocumentStatus.REQUIRES_REUPLOAD.value:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, 
+                detail=f"Cannot replace document in '{existing_doc.status}' status. Only documents requiring re-upload can be replaced."
+            )
+        target_doc = existing_doc
+    elif application_id:
+        target_doc = db.query(Document).filter(
+            Document.application_id == application_id,
+            Document.user_id == current_user.id,
+            Document.document_type == document_type,
+            Document.status == DocumentStatus.REQUIRES_REUPLOAD.value
+        ).first()
+
+    # Use existing document's ID if replacing, otherwise allocate new UUID
+    doc_id = target_doc.id if target_doc else uuid.uuid4()
     safe_filename = sanitize_filename(file.filename or "uploaded_document.pdf")
     
     doc_dir = (STORAGE_DIR / str(doc_id)).resolve()
     doc_dir.mkdir(parents=True, exist_ok=True)
+
+    # When replacing an existing document, clean up previous physical files in its folder
+    if target_doc and doc_dir.exists():
+        for existing_file in doc_dir.iterdir():
+            if existing_file.is_file():
+                try:
+                    existing_file.unlink()
+                except OSError:
+                    pass
+
     target_path = (doc_dir / safe_filename).resolve()
     
     # Ensure path cannot escape STORAGE_DIR
@@ -140,6 +199,9 @@ def upload_document(
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid storage path")
 
+    # Rewind upload file stream before writing
+    file.file.seek(0)
+
     # Persist real file bytes to storage
     with open(target_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
@@ -147,26 +209,57 @@ def upload_document(
     # Relative storage key stored in database
     relative_storage_key = f"documents/{doc_id}/{safe_filename}"
 
-    new_doc = Document(
-        id=doc_id,
-        user_id=current_user.id,
-        application_id=application_id,
-        document_type=document_type,
-        file_url=relative_storage_key,
-        status=DocumentStatus.UPLOADED.value
-    )
-    db.add(new_doc)
+    if target_doc:
+        target_doc.file_url = relative_storage_key
+        target_doc.status = DocumentStatus.UPLOADED.value
+        target_doc.review_notes = None
+        target_doc.reviewed_at = None
+        target_doc.reviewed_by = None
+        target_doc.updated_at = datetime.now(timezone.utc)
+        doc_record = target_doc
+
+        app_id_for_audit = target_doc.application_id or application_id
+        if app_id_for_audit:
+            audit = ApplicationAuditEvent(
+                application_id=app_id_for_audit,
+                user_id=current_user.id,
+                event_type="DOCUMENT_REPLACED",
+                title="Customer Uploaded Replacement Document",
+                description=f"Applicant uploaded replacement file for '{target_doc.document_type.replace('_', ' ')}' which previously required re-upload."
+            )
+            db.add(audit)
+    else:
+        doc_record = Document(
+            id=doc_id,
+            user_id=current_user.id,
+            application_id=application_id,
+            document_type=document_type,
+            file_url=relative_storage_key,
+            status=DocumentStatus.UPLOADED.value
+        )
+        db.add(doc_record)
+
+    if application_id:
+        app_to_check = db.query(Application).filter(Application.id == application_id).first()
+        if app_to_check:
+            from app.api.employee import invalidate_review_readiness
+            invalidate_review_readiness(
+                app_to_check, db, current_user.id,
+                f"New document '{document_type}' uploaded by applicant."
+            )
+
     db.commit()
-    db.refresh(new_doc)
+    db.refresh(doc_record)
     
     return DocumentResponse(
-        id=new_doc.id,
-        application_id=new_doc.application_id,
-        document_type=new_doc.document_type,
-        file_url=f"/api/documents/{new_doc.id}/content",
-        status=new_doc.status,
-        created_at=new_doc.created_at
+        id=doc_record.id,
+        application_id=doc_record.application_id,
+        document_type=doc_record.document_type,
+        file_url=f"/api/documents/{doc_record.id}/content",
+        status=doc_record.status,
+        created_at=doc_record.created_at
     )
+
 
 
 @router.get("/{document_id}/content")
@@ -241,7 +334,10 @@ def get_document_content(
         path=str(file_path),
         media_type=media_type,
         headers={
-            "Content-Disposition": f'inline; filename="{file_path.name}"'
+            "Content-Disposition": f'inline; filename="{file_path.name}"',
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
         }
     )
 

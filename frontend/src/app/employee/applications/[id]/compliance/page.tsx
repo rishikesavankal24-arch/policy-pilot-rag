@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { EmployeeLayout } from "@/components/layout/EmployeeLayout";
 import { useLanguage } from "@/i18n/LanguageContext";
 import { getActiveSessionToken } from "@/lib/session";
+import { formatDateTime } from "@/lib/utils";
 import {
   ArrowLeft,
   ShieldCheck,
@@ -30,7 +31,9 @@ import {
   ClipboardList,
   Save,
   CheckSquare,
-  AlertCircle
+  AlertCircle,
+  RefreshCw,
+  FileCheck
 } from "lucide-react";
 
 interface DocumentItem {
@@ -58,6 +61,7 @@ interface InformationRequestItem {
   response_notes: string | null;
   created_at: string | null;
   responded_at: string | null;
+  resolved_at: string | null;
 }
 
 interface ComplianceChecklistItem {
@@ -93,6 +97,44 @@ interface ComplianceAuditEventItem {
   description: string;
   user_id: string | null;
   created_at: string | null;
+}
+
+interface ChecklistSummary {
+  total: number;
+  reviewed: number;
+  pending: number;
+  requires_information: number;
+  not_applicable: number;
+}
+
+interface DocumentSummary {
+  total: number;
+  verified_or_accepted: number;
+  pending_review: number;
+  rejected_or_reupload: number;
+}
+
+interface InfoRequestsSummary {
+  total: number;
+  open: number;
+  responded: number;
+  resolved: number;
+}
+
+interface ReviewReadinessData {
+  application_id: string;
+  status: "PENDING_REVIEW_PREPARATION" | "READY_FOR_COMPLIANCE_ASSESSMENT" | string;
+  is_ready: boolean;
+  can_mark_ready: boolean;
+  blocking_reasons: string[];
+  completed_checks: string[];
+  pending_checks: string[];
+  checklist_summary: ChecklistSummary;
+  document_summary: DocumentSummary;
+  info_requests_summary: InfoRequestsSummary;
+  updated_at: string | null;
+  updated_by: string | null;
+  updated_by_name: string | null;
 }
 
 interface ComplianceWorkspaceData {
@@ -132,6 +174,7 @@ interface ComplianceWorkspaceData {
     feature: string;
     message: string;
   };
+  readiness?: ReviewReadinessData | null;
 }
 
 export default function EmployeeComplianceWorkspacePage() {
@@ -158,6 +201,11 @@ export default function EmployeeComplianceWorkspacePage() {
   const [newNote, setNewNote] = useState("");
   const [isSubmittingNote, setIsSubmittingNote] = useState(false);
   const [noteError, setNoteError] = useState<string | null>(null);
+
+  // Review Readiness Action state
+  const [isMarkingReady, setIsMarkingReady] = useState(false);
+  const [isResettingReadiness, setIsResettingReadiness] = useState(false);
+  const [readinessActionError, setReadinessActionError] = useState<string | null>(null);
 
   const formatINR = (val?: number) => {
     if (val === undefined || val === null) return "₹0";
@@ -343,6 +391,89 @@ export default function EmployeeComplianceWorkspacePage() {
     }
   };
 
+  // Mark review ready
+  const handleMarkReviewReady = async () => {
+    if (!id) return;
+    try {
+      setIsMarkingReady(true);
+      setReadinessActionError(null);
+
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+      const res = await fetch(`${apiUrl}/api/employee/applications/${id}/review-readiness/mark-ready`, {
+        method: "POST",
+        headers: getHeaders(),
+        credentials: "include"
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        const detailMsg = typeof errData.detail === "object" && errData.detail?.message
+          ? errData.detail.message
+          : (errData.detail || `Failed to mark application review ready (HTTP ${res.status})`);
+        throw new Error(detailMsg);
+      }
+
+      const updatedReadiness: ReviewReadinessData = await res.json();
+      setData((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          readiness: updatedReadiness
+        };
+      });
+
+      setSuccessMessage("Application marked READY FOR COMPLIANCE ASSESSMENT. Governance audit logged.");
+      setTimeout(() => setSuccessMessage(null), 4000);
+      fetchWorkspace();
+    } catch (err: any) {
+      setReadinessActionError(err.message || "Failed to mark application review ready.");
+    } finally {
+      setIsMarkingReady(false);
+    }
+  };
+
+  // Reset review readiness
+  const handleResetReadiness = async () => {
+    if (!id) return;
+    const confirmReset = window.confirm("Are you sure you want to reset the review readiness status back to PENDING_REVIEW_PREPARATION? An audit log will be recorded.");
+    if (!confirmReset) return;
+
+    try {
+      setIsResettingReadiness(true);
+      setReadinessActionError(null);
+
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+      const res = await fetch(`${apiUrl}/api/employee/applications/${id}/review-readiness/reset`, {
+        method: "POST",
+        headers: getHeaders(),
+        credentials: "include",
+        body: JSON.stringify({ reason: "Manual reset by compliance reviewer" })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `Failed to reset review readiness (HTTP ${res.status})`);
+      }
+
+      const updatedReadiness: ReviewReadinessData = await res.json();
+      setData((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          readiness: updatedReadiness
+        };
+      });
+
+      setSuccessMessage("Review readiness reset to PENDING_REVIEW_PREPARATION.");
+      setTimeout(() => setSuccessMessage(null), 4000);
+      fetchWorkspace();
+    } catch (err: any) {
+      setReadinessActionError(err.message || "Failed to reset review readiness.");
+    } finally {
+      setIsResettingReadiness(false);
+    }
+  };
+
   const getChecklistCategoryBadge = (cat: string) => {
     switch (cat) {
       case "DOCUMENT_COMPLETENESS":
@@ -376,6 +507,13 @@ export default function EmployeeComplianceWorkspacePage() {
         return "bg-slate-800 text-slate-400 border-slate-700";
     }
   };
+
+  const sortedDocuments = useMemo(() => {
+    if (!data?.documents) return [];
+    return [...data.documents].sort(
+      (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+    );
+  }, [data?.documents]);
 
   const getChecklistStatusColor = (status: string) => {
     switch (status) {
@@ -461,7 +599,7 @@ export default function EmployeeComplianceWorkspacePage() {
                   {conflictError}
                 </p>
                 <p className="text-xs text-amber-300/80 mt-2 leading-relaxed">
-                  Under institutional banking underwriting guidelines, loan officers and authorized bank employees cannot review, evaluate, or approve applications submitted by themselves. This application has been flagged in the centralized queue and will be processed exclusively by an independent officer.
+                  Under PolicyPilot review guidelines, loan officers and authorized employees cannot review, evaluate, or approve applications submitted by themselves. This application has been flagged in the operational review queue and will be processed exclusively by an independent officer.
                 </p>
               </div>
             </div>
@@ -519,9 +657,7 @@ export default function EmployeeComplianceWorkspacePage() {
                   <p className="text-xs text-slate-400 mt-1 font-mono">
                     APPLICATION ID: {data.application.id} • FACILITY:{" "}
                     {tLoanType(data.application.loan_type)} • SUBMITTED:{" "}
-                    {data.application.created_at
-                      ? new Date(data.application.created_at).toLocaleString()
-                      : "N/A"}
+                    {formatDateTime(data.application.created_at)}
                   </p>
                 </div>
 
@@ -548,14 +684,222 @@ export default function EmployeeComplianceWorkspacePage() {
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
                   <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-mono font-bold tracking-wider uppercase">
-                    MODULE M10 BOUNDARY: MANUAL COMPLIANCE AUDITING ACTIVE
+                    MODULE M10 BOUNDARY: MANUAL COMPLIANCE REVIEW ACTIVE
                   </span>
                 </div>
                 <p className="text-xs text-slate-300 leading-relaxed">
-                  Adaptive RAG, hybrid BM25 / vector retrieval, evidence reranking, and automated policy cross-referencing are reserved for <strong className="text-white">Module M10</strong>. This compliance review workspace is strictly human-verified. Checklist evaluations and notes are recorded directly to the bank&apos;s immutable audit trail.
+                  Adaptive RAG, hybrid BM25 / vector retrieval, evidence reranking, and automated policy cross-referencing are reserved for <strong className="text-white">Module M10</strong> (currently an integration boundary). This compliance review workspace is strictly human-verified. Checklist evaluations and notes are recorded directly to the internal audit trail.
                 </p>
               </div>
             </div>
+
+            {/* M05.4 Review Readiness & Decision Preparation Section */}
+            {data.readiness && (
+              <div className="bg-[#0F172A] border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+                  <div className="flex items-center gap-2.5">
+                    <FileCheck className="h-5 w-5 text-emerald-400" />
+                    <div>
+                      <h2 className="text-xs font-bold uppercase tracking-wider text-white">
+                        Review Readiness & Decision Preparation
+                      </h2>
+                      <p className="text-[11px] text-slate-400">
+                        Operational gate before compliance assessment
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`px-3 py-1 rounded-full text-[11px] font-mono font-bold uppercase border flex items-center gap-1.5 ${
+                        data.readiness.status === "READY_FOR_COMPLIANCE_ASSESSMENT"
+                          ? "bg-emerald-950/90 text-emerald-300 border-emerald-500/50 shadow-sm shadow-emerald-900/30"
+                          : "bg-amber-950/90 text-amber-300 border-amber-500/50 shadow-sm shadow-amber-900/30"
+                      }`}
+                    >
+                      {data.readiness.status === "READY_FOR_COMPLIANCE_ASSESSMENT" ? (
+                        <>
+                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                          <span>Ready for Compliance Assessment</span>
+                        </>
+                      ) : (
+                        <>
+                          <Clock className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                          <span>Review Preparation Pending</span>
+                        </>
+                      )}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Readiness Error Alert */}
+                {readinessActionError && (
+                  <div className="p-3 rounded-lg bg-rose-950/60 border border-rose-600/40 text-rose-200 text-xs flex items-center gap-2">
+                    <AlertCircle className="h-4 w-4 text-rose-400 shrink-0" />
+                    <span>{readinessActionError}</span>
+                  </div>
+                )}
+
+                {/* 3 Metrics Overview Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className="p-3.5 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-400 font-medium">Document Completeness</span>
+                      <span
+                        className={`font-mono font-bold ${
+                          data.readiness.document_summary.verified_or_accepted === data.readiness.document_summary.total && data.readiness.document_summary.total > 0
+                            ? "text-emerald-400"
+                            : "text-amber-400"
+                        }`}
+                      >
+                        {data.readiness.document_summary.verified_or_accepted} / {data.readiness.document_summary.total}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-500 font-mono">
+                      {data.readiness.document_summary.pending_review} pending • {data.readiness.document_summary.rejected_or_reupload} deficient
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-400 font-medium">Compliance Checklist</span>
+                      <span
+                        className={`font-mono font-bold ${
+                          data.readiness.checklist_summary.reviewed + data.readiness.checklist_summary.not_applicable === data.readiness.checklist_summary.total && data.readiness.checklist_summary.total > 0
+                            ? "text-emerald-400"
+                            : "text-amber-400"
+                        }`}
+                      >
+                        {data.readiness.checklist_summary.reviewed + data.readiness.checklist_summary.not_applicable} / {data.readiness.checklist_summary.total}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-500 font-mono">
+                      {data.readiness.checklist_summary.pending} pending • {data.readiness.checklist_summary.requires_information} requires info
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-400 font-medium">Customer Information Requests</span>
+                      <span
+                        className={`font-mono font-bold ${
+                          data.readiness.info_requests_summary.open + data.readiness.info_requests_summary.responded === 0
+                            ? "text-emerald-400"
+                            : "text-amber-400"
+                        }`}
+                      >
+                        {data.readiness.info_requests_summary.open + data.readiness.info_requests_summary.responded} Open
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-500 font-mono">
+                      {data.readiness.info_requests_summary.resolved} resolved / closed
+                    </div>
+                  </div>
+                </div>
+
+                {/* Pre-Assessment Checklist Status & Blockers */}
+                {data.readiness.blocking_reasons.length > 0 ? (
+                  <div className="p-4 rounded-xl bg-amber-950/30 border border-amber-500/40 space-y-2.5">
+                    <div className="flex items-center gap-2 text-amber-300">
+                      <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+                      <span className="text-xs font-bold uppercase tracking-wider">
+                        Prerequisites Incomplete ({data.readiness.blocking_reasons.length} Blocker{data.readiness.blocking_reasons.length > 1 ? "s" : ""})
+                      </span>
+                    </div>
+                    <ul className="space-y-1.5 pl-6 list-disc text-xs text-amber-200/90 leading-relaxed">
+                      {data.readiness.blocking_reasons.map((reason, idx) => (
+                        <li key={idx}>{reason}</li>
+                      ))}
+                    </ul>
+                    <p className="text-[11px] text-amber-400/80 italic pt-1 border-t border-amber-500/20">
+                      Resolution guidance: Verify all uploaded documents, complete each compliance checklist item evaluation, and resolve all applicant queries to unlock formal review declaration.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/40 space-y-1.5">
+                    <div className="flex items-center gap-2 text-emerald-300">
+                      <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+                      <span className="text-xs font-bold uppercase tracking-wider">
+                        All Operational Verification Prerequisites Satisfied
+                      </span>
+                    </div>
+                    <p className="text-xs text-emerald-200/90 leading-relaxed">
+                      All verification documents have been accepted, all 5 compliance checklist points are confirmed, and no open customer queries remain. This application is qualified for formal compliance declaration.
+                    </p>
+                  </div>
+                )}
+
+                {/* Governance Details & Actions Bar */}
+                <div className="pt-2 border-t border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                  <div className="text-slate-400 font-mono text-[11px]">
+                    {data.readiness.updated_by_name ? (
+                      <span>
+                        Status updated by <strong className="text-slate-200">{data.readiness.updated_by_name}</strong>
+                        {data.readiness.updated_at && ` on ${formatDateTime(data.readiness.updated_at)}`}
+                      </span>
+                    ) : (
+                      <span>
+                        Dynamic readiness calculation active
+                        {data.readiness.updated_at && ` • Last updated: ${formatDateTime(data.readiness.updated_at)}`}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2.5 shrink-0">
+                    {data.readiness.status === "READY_FOR_COMPLIANCE_ASSESSMENT" ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleResetReadiness}
+                          disabled={isResettingReadiness}
+                          className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-800/50 text-slate-300 hover:text-white border border-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-sm disabled:cursor-not-allowed"
+                        >
+                          <RefreshCw className={`h-3.5 w-3.5 ${isResettingReadiness ? "animate-spin" : ""}`} />
+                          <span>Reopen Preparation</span>
+                        </button>
+                        <span className="px-3.5 py-1.5 rounded-lg bg-emerald-950/80 border border-emerald-500/50 text-emerald-300 font-bold text-xs inline-flex items-center gap-1.5 shadow-sm">
+                          <Check className="h-3.5 w-3.5 text-emerald-400" />
+                          <span>Assessment Ready</span>
+                        </span>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleMarkReviewReady}
+                        disabled={!data.readiness.can_mark_ready || isMarkingReady}
+                        className={`px-4 py-2 rounded-lg text-xs font-bold inline-flex items-center gap-2 transition-all shadow-sm ${
+                          data.readiness.can_mark_ready && !isMarkingReady
+                            ? "bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/30 cursor-pointer"
+                            : "bg-slate-800/80 text-slate-500 border border-slate-700/60 cursor-not-allowed"
+                        }`}
+                        title={
+                          data.readiness.can_mark_ready
+                            ? "Declare this application ready for compliance assessment"
+                            : "Prerequisites incomplete: resolve all blockers before declaring ready"
+                        }
+                      >
+                        {isMarkingReady ? (
+                          <>
+                            <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            <span>Marking Ready...</span>
+                          </>
+                        ) : data.readiness.can_mark_ready ? (
+                          <>
+                            <CheckCircle2 className="h-4 w-4" />
+                            <span>Mark Review Ready</span>
+                          </>
+                        ) : (
+                          <>
+                            <Lock className="h-3.5 w-3.5" />
+                            <span>Mark Review Ready (Blockers Exist)</span>
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Main 2-Column Responsive Layout */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -636,13 +980,13 @@ export default function EmployeeComplianceWorkspacePage() {
                     </span>
                   </div>
 
-                  {data.documents.length === 0 ? (
+                  {sortedDocuments.length === 0 ? (
                     <div className="p-4 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-400 text-center">
                       No documents currently attached to this application.
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      {data.documents.map((doc) => (
+                      {sortedDocuments.map((doc) => (
                         <div
                           key={doc.id}
                           className="p-3.5 rounded-lg bg-slate-900 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
@@ -660,12 +1004,15 @@ export default function EmployeeComplianceWorkspacePage() {
                                 {doc.status}
                               </span>
                             </div>
-                            <p className="text-[11px] text-slate-400 font-mono">
-                              Uploaded: {doc.created_at ? new Date(doc.created_at).toLocaleString() : "N/A"}
-                            </p>
+                            <div className="text-[11px] text-slate-400 font-mono space-y-0.5">
+                              <p>Uploaded: {formatDateTime(doc.created_at)}</p>
+                              {doc.reviewed_at && (
+                                <p className="text-emerald-400/90">Reviewed: {formatDateTime(doc.reviewed_at)}</p>
+                              )}
+                            </div>
                             {doc.review_notes && (
                               <p className="text-xs text-amber-300/90 italic mt-1">
-                                Officer Note: {doc.review_notes}
+                                Officer Note: {["nil", "none"].includes(doc.review_notes.trim().toLowerCase()) ? "Reason not recorded" : doc.review_notes}
                               </p>
                             )}
                           </div>
@@ -697,7 +1044,7 @@ export default function EmployeeComplianceWorkspacePage() {
                       </h2>
                     </div>
                     <span className="text-[11px] text-slate-400 font-mono">
-                      Institutional Audit Standards
+                      Compliance Review Standards
                     </span>
                   </div>
 
@@ -805,13 +1152,14 @@ export default function EmployeeComplianceWorkspacePage() {
                             </div>
 
                             <div className="flex items-center justify-between pt-1">
-                              <div className="text-[11px] text-slate-500 font-mono">
-                                {item.updated_by_name && (
+                              <div className="text-[11px] text-slate-400 font-mono">
+                                {item.updated_at ? (
                                   <span>
-                                    Last verified by {item.updated_by_name}
-                                    {item.updated_at &&
-                                      ` on ${new Date(item.updated_at).toLocaleString()}`}
+                                    Last updated: {formatDateTime(item.updated_at)}
+                                    {item.updated_by_name ? ` by ${item.updated_by_name}` : ""}
                                   </span>
+                                ) : (
+                                  <span>Pending initial verification</span>
                                 )}
                               </div>
 
@@ -878,6 +1226,15 @@ export default function EmployeeComplianceWorkspacePage() {
                               {req.response_notes}
                             </div>
                           )}
+                          <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono pt-1 text-slate-400 border-t border-slate-800/60">
+                            <span>Requested: {formatDateTime(req.created_at)}</span>
+                            {req.responded_at && (
+                              <span className="text-emerald-400">Responded: {formatDateTime(req.responded_at)}</span>
+                            )}
+                            {req.resolved_at && (
+                              <span className="text-blue-400">Resolved: {formatDateTime(req.resolved_at)}</span>
+                            )}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -961,9 +1318,7 @@ export default function EmployeeComplianceWorkspacePage() {
                                 {rn.author_name}
                               </span>
                               <span className="font-mono text-slate-500">
-                                {rn.created_at
-                                  ? new Date(rn.created_at).toLocaleString()
-                                  : ""}
+                                {formatDateTime(rn.created_at)}
                               </span>
                             </div>
                             <p className="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap">
@@ -996,12 +1351,10 @@ export default function EmployeeComplianceWorkspacePage() {
                           <div className="absolute -left-[19px] top-1 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-[#0F172A]"></div>
                           <p className="text-xs font-bold text-slate-200">{ev.title}</p>
                           <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
-                            {ev.description}
+                            {ev.description ? ev.description.replace(/Reason:\s*(nil|none)\b/gi, "Reason: Reason not recorded") : ""}
                           </p>
                           <span className="text-[10px] text-slate-500 font-mono block mt-1">
-                            {ev.created_at
-                              ? new Date(ev.created_at).toLocaleString()
-                              : "Date recorded"}
+                            {formatDateTime(ev.created_at)}
                           </span>
                         </div>
                       ))}

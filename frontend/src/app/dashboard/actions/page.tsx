@@ -10,7 +10,9 @@ import {
   RefreshCw,
   FileText,
   ShieldAlert,
-  Info
+  Info,
+  Upload,
+  HelpCircle
 } from "lucide-react";
 import { useLanguage } from "@/i18n/LanguageContext";
 import { AuthenticatedLayout } from "@/components/layout/AuthenticatedLayout";
@@ -71,6 +73,26 @@ export default function RequiredActionsPage() {
   useEffect(() => {
     fetchActions();
   }, [fetchActions]);
+
+  const getWorkflowBadge = (type?: string, urgency?: string, priority?: string) => {
+    if (type === "DOCUMENT_REPLACEMENT_REQUIRED") {
+      return (
+        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] font-bold bg-amber-100 text-amber-950 border border-amber-300">
+          <Upload className="h-3 w-3 text-amber-700" />
+          <span>DOCUMENT REPLACEMENT REQUIRED</span>
+        </span>
+      );
+    }
+    if (type === "ADDITIONAL_INFORMATION_REQUIRED" || type === "INFORMATION_REQUEST") {
+      return (
+        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] font-bold bg-blue-100 text-blue-950 border border-blue-300">
+          <HelpCircle className="h-3 w-3 text-blue-700" />
+          <span>ADDITIONAL INFORMATION REQUIRED</span>
+        </span>
+      );
+    }
+    return getUrgencyBadge(urgency, priority);
+  };
 
   const getUrgencyBadge = (urgency?: string, priority?: string) => {
     const val = (urgency || priority || "").toUpperCase();
@@ -179,14 +201,24 @@ export default function RequiredActionsPage() {
             const destinationHref = act.action_url || act.link;
             const hasValidDestination = typeof destinationHref === "string" && destinationHref.trim().length > 0;
 
+            const isReplacement = act.type === "DOCUMENT_REPLACEMENT_REQUIRED";
+            const isInfoReq = act.type === "ADDITIONAL_INFORMATION_REQUIRED" || act.type === "INFORMATION_REQUEST";
+
             return (
               <div
                 key={act.id || `action-${index}`}
-                className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm hover:border-slate-300 transition-colors flex flex-col md:flex-row md:items-center md:justify-between gap-4"
+                className={cn(
+                  "rounded-lg p-5 shadow-sm transition-colors flex flex-col md:flex-row md:items-center md:justify-between gap-4",
+                  isReplacement
+                    ? "bg-amber-50/50 border-2 border-amber-300 hover:border-amber-400"
+                    : isInfoReq
+                    ? "bg-blue-50/40 border-2 border-blue-200 hover:border-blue-300"
+                    : "bg-white border border-slate-200 hover:border-slate-300"
+                )}
               >
                 <div className="space-y-1.5 flex-1 min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    {getUrgencyBadge(act.urgency, act.priority)}
+                    {getWorkflowBadge(act.type, act.urgency, act.priority)}
                     {act.application_id && (
                       <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">
                         {t("actionsPage.refLabel")}: {act.application_id.slice(0, 8)}
@@ -205,7 +237,14 @@ export default function RequiredActionsPage() {
                   {hasValidDestination ? (
                     <Link
                       href={destinationHref}
-                      className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-[#0B192C] hover:bg-blue-900 rounded transition-colors w-full md:w-auto text-center"
+                      className={cn(
+                        "inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-bold text-white rounded transition-colors w-full md:w-auto text-center shadow-sm",
+                        isReplacement
+                          ? "bg-amber-600 hover:bg-amber-700"
+                          : isInfoReq
+                          ? "bg-blue-600 hover:bg-blue-700"
+                          : "bg-[#0B192C] hover:bg-blue-900"
+                      )}
                     >
                       <span>{act.action_label || "Proceed"}</span>
                       <ArrowRight className="h-3.5 w-3.5" />

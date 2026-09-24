@@ -75,6 +75,12 @@ export default function NotificationsPage() {
           badge: "bg-blue-50 text-blue-800 border-blue-300",
           icon: <ShieldCheck className="h-4 w-4 text-blue-600 shrink-0 mt-0.5" />
         };
+      case 'STATUS_UPDATE':
+        return {
+          label: "APPLICATION STATUS",
+          badge: "bg-blue-50 text-blue-800 border-blue-300",
+          icon: <CheckCircle className="h-4 w-4 text-blue-600 shrink-0 mt-0.5" />
+        };
       default:
         return {
           label: "OFFICIAL BULLETIN",

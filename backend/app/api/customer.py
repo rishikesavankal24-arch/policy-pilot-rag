@@ -107,7 +107,33 @@ def get_customer_dashboard_summary(
                 "action_label": "Resume Application"
             })
             
-    # 2. Specific open supplementary information requests from credit desk
+    # 2. Deficient documents requiring replacement (REQUIRES_REUPLOAD)
+    reupload_docs = db.query(Document).join(Application).filter(
+        Application.user_id == current_user.id,
+        Document.status == DocumentStatus.REQUIRES_REUPLOAD.value
+    ).all()
+
+    for doc in reupload_docs:
+        doc_name = doc.document_type.replace('_', ' ').title()
+        reason = doc.review_notes if (doc.review_notes and doc.review_notes.strip().lower() not in ["nil", "none"]) else "Correction or clearer copy required"
+        required_actions.append({
+            "id": f"reupload_{doc.id}",
+            "type": "DOCUMENT_REPLACEMENT_REQUIRED",
+            "title": f"Document Replacement Required: {doc_name}",
+            "description": f"Reason: {reason}",
+            "document_id": str(doc.id),
+            "document_type": doc.document_type,
+            "document_name": doc_name,
+            "deficiency_reason": reason,
+            "application_id": str(doc.application_id),
+            "link": f"/dashboard/applications/{doc.application_id}?replace_doc={doc.id}",
+            "action_url": f"/dashboard/applications/{doc.application_id}?replace_doc={doc.id}",
+            "priority": "URGENT",
+            "urgency": "HIGH",
+            "action_label": "Replace Document"
+        })
+
+    # 3. Specific open supplementary information requests from credit desk
     open_requests = db.query(AdditionalInformationRequest).join(Application).filter(
         Application.user_id == current_user.id,
         AdditionalInformationRequest.status == InformationRequestStatus.OPEN.value
@@ -119,7 +145,7 @@ def get_customer_dashboard_summary(
         required_actions.append({
             "id": f"inforeq_{ir.id}",
             "type": "INFORMATION_REQUEST",
-            "title": f"Action Required: {ir.title}",
+            "title": f"Additional Information Required: {ir.title}",
             "description": ir.description,
             "application_id": str(ir.application_id),
             "request_id": str(ir.id),
@@ -128,7 +154,7 @@ def get_customer_dashboard_summary(
             "action_url": f"/dashboard/applications/{ir.application_id}",
             "priority": "URGENT",
             "urgency": "HIGH",
-            "action_label": "Upload Requested Document"
+            "action_label": "Respond / Upload"
         })
 
     # 3. Fallback for any application in ADDITIONAL_INFO_REQUIRED without individual request items
@@ -297,18 +323,6 @@ def customer_ai_query(
     }
 
 
-@router.get("/actions")
-def get_customer_actions(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Returns required actions specifically for the customer (open info requests, drafts, etc.).
-    """
-    summary = get_customer_dashboard_summary(current_user=current_user, db=db)
-    return summary["required_actions"]
-
-
 @router.post("/applications/{application_id}/information-requests/{request_id}/respond")
 def respond_to_information_request(
     application_id: UUID,
@@ -411,6 +425,13 @@ def respond_to_information_request(
         related_entity_id=app.id
     )
     db.add(notif)
+
+    # Invalidate review readiness if application was marked review-ready
+    from app.api.employee import invalidate_review_readiness
+    invalidate_review_readiness(
+        app, db, current_user.id,
+        f"Applicant responded to information request '{info_req.title}' with document '{doc_type}'."
+    )
 
     db.commit()
     db.refresh(info_req)

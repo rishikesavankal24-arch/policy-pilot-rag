@@ -221,17 +221,17 @@ export function EmployeeLayout({ children }: EmployeeLayoutProps) {
 
   return (
     <div className="min-h-screen bg-[#0B132B] text-slate-100 flex flex-col font-sans">
-      {/* Enterprise Regulated Operations Utility Strip */}
+      {/* Enterprise Compliance Workflow Utility Strip */}
       <div className="bg-[#070D1E] text-slate-400 text-[11px] font-medium tracking-wider px-4 sm:px-6 py-1.5 flex items-center justify-between border-b border-slate-800">
         <div className="flex items-center gap-2.5">
           <span className="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-          <span className="uppercase font-semibold text-slate-200">PolicyPilot Enterprise • Banking & Underwriting Console</span>
+          <span className="uppercase font-semibold text-slate-200">PolicyPilot Enterprise • Policy & Underwriting Console</span>
           <span className="hidden md:inline-block text-slate-500">|</span>
-          <span className="hidden md:inline-block text-slate-400 font-mono text-[10px]">OPERATIONAL UNDERWRITING WORKSPACE</span>
+          <span className="hidden md:inline-block text-slate-400 font-mono text-[10px]">POLICY REVIEW WORKSPACE</span>
         </div>
         <div className="flex items-center gap-4 text-[10px] text-slate-400 uppercase tracking-wider">
           <span className="hidden sm:inline-block bg-slate-800/80 px-2 py-0.5 rounded text-amber-300 border border-amber-500/20 font-mono">
-            SECURE AUDIT ACTIVE
+            INTERNAL AUDIT TRAIL
           </span>
           <span className="font-mono text-slate-400">NODE: DL-014-OPS</span>
         </div>
@@ -645,7 +645,7 @@ export function EmployeeLayout({ children }: EmployeeLayoutProps) {
         {children}
       </main>
 
-      {/* Regulated Operations Footer */}
+      {/* Compliance Operations Footer */}
       <footer className="bg-[#070D1E] border-t border-slate-800 text-slate-500 text-[11px] py-4 px-4 sm:px-6">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
           <div className="flex items-center gap-2">
@@ -653,12 +653,12 @@ export function EmployeeLayout({ children }: EmployeeLayoutProps) {
             <span>•</span>
             <span>Version 1.4-LTS</span>
             <span>•</span>
-            <span>Regulated Institutional Operations</span>
+            <span>Prototype Compliance Workflow</span>
           </div>
           <div className="flex items-center gap-4 text-slate-500">
-            <span>Audit Trail Enabled</span>
+            <span>Policy Review Workspace</span>
             <span>•</span>
-            <span>RBI Compliance Engine Connected</span>
+            <span>Internal Audit Trail Enabled</span>
           </div>
         </div>
       </footer>

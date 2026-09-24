@@ -59,14 +59,14 @@ export default function EmployeeOrganizationPage() {
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-xl font-bold tracking-tight text-white uppercase">
-                Institutional Organization & Hierarchy
+                Organizational Hierarchy & Operations
               </h1>
               <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-400/10 text-amber-400 border border-amber-400/30">
-                REGULATORY NODE
+                ORGANIZATIONAL UNIT
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-1">
-              Institutional entity mapping, oversight jurisdiction, and statutory branch alignment
+              Operational unit mapping, prototype review division, and branch alignment
             </p>
           </div>
 
@@ -88,7 +88,7 @@ export default function EmployeeOrganizationPage() {
             </div>
             <div>
               <h2 className="text-lg font-bold text-white">
-                {org?.organization_name || "State Bank Operations & Governance Division"}
+                {org?.organization_name || "PolicyPilot Operations & Review Division"}
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
                 {org?.department} • {org?.division}
@@ -99,8 +99,8 @@ export default function EmployeeOrganizationPage() {
           {/* Institutional Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-y-4 gap-x-6 text-xs">
             <div>
-              <span className="text-[10px] font-mono uppercase text-slate-400 block">Apex Regulatory Authority</span>
-              <span className="font-semibold text-amber-400 mt-0.5 block">{org?.regulatory_body || "Reserve Bank of India (RBI)"}</span>
+              <span className="text-[10px] font-mono uppercase text-slate-400 block">Reference Regulatory Framework</span>
+              <span className="font-semibold text-amber-400 mt-0.5 block">{org?.regulatory_body || "Reserve Bank of India (RBI Guidelines)"}</span>
             </div>
 
             <div>

@@ -127,6 +127,10 @@ class DocumentStatus(str, enum.Enum):
     REJECTED = "REJECTED"
     REQUIRES_REUPLOAD = "REQUIRES_REUPLOAD"
 
+class ReviewReadinessState(str, enum.Enum):
+    PENDING_REVIEW_PREPARATION = "PENDING_REVIEW_PREPARATION"
+    READY_FOR_COMPLIANCE_ASSESSMENT = "READY_FOR_COMPLIANCE_ASSESSMENT"
+
 class Application(Base):
     __tablename__ = "applications"
 
@@ -143,11 +147,20 @@ class Application(Base):
     existing_liabilities = Column(String, nullable=True)
     
     status = Column(String, default=ApplicationStatus.DRAFT.value, nullable=False)
+    review_readiness_status = Column(
+        String,
+        default=ReviewReadinessState.PENDING_REVIEW_PREPARATION.value,
+        nullable=False,
+        server_default=ReviewReadinessState.PENDING_REVIEW_PREPARATION.value
+    )
+    review_readiness_updated_at = Column(DateTime(timezone=True), nullable=True)
+    review_readiness_updated_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
-    user = relationship("User", backref="applications")
+    user = relationship("User", foreign_keys=[user_id], backref="applications")
+    readiness_updated_by_user = relationship("User", foreign_keys=[review_readiness_updated_by])
     documents = relationship("Document", back_populates="application")
     compliance_checklist_items = relationship("ComplianceChecklistItem", back_populates="application", cascade="all, delete-orphan", order_by="ComplianceChecklistItem.display_order")
     compliance_notes = relationship("ComplianceReviewNote", back_populates="application", cascade="all, delete-orphan", order_by="ComplianceReviewNote.created_at.desc()")

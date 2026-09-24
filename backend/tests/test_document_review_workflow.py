@@ -8,8 +8,10 @@ from app.db.models import (
     InformationRequestStatus, ApplicationAuditEvent
 )
 from app.core.security import create_user_session
+from app.api.documents import STORAGE_DIR
 import uuid
 import io
+import shutil
 from app.db.session import SessionLocal
 
 client = TestClient(app)
@@ -23,6 +25,11 @@ def db_session():
         db.rollback()
         test_users = db.query(User).filter(User.email.like("test_doc_rev_%@example.com")).all()
         for user in test_users:
+            docs = db.query(Document).filter(Document.user_id == user.id).all()
+            for d in docs:
+                doc_dir = STORAGE_DIR / str(d.id)
+                if doc_dir.exists():
+                    shutil.rmtree(doc_dir, ignore_errors=True)
             apps = db.query(Application).filter(Application.user_id == user.id).all()
             for app_obj in apps:
                 db.query(AdditionalInformationRequest).filter(AdditionalInformationRequest.application_id == app_obj.id).delete()
@@ -30,7 +37,8 @@ def db_session():
             db.query(AdditionalInformationRequest).filter(AdditionalInformationRequest.requested_by == user.id).delete()
             db.query(ApplicationAuditEvent).filter(ApplicationAuditEvent.user_id == user.id).delete()
             db.query(Notification).filter(Notification.user_id == user.id).delete()
-            db.query(Document).filter((Document.user_id == user.id) | (Document.reviewed_by == user.id)).delete()
+            db.query(Document).filter(Document.reviewed_by == user.id).update({Document.reviewed_by: None})
+            db.query(Document).filter(Document.user_id == user.id).delete()
             db.query(Application).filter(Application.user_id == user.id).delete()
             db.query(EmployeeRequest).filter((EmployeeRequest.user_id == user.id) | (EmployeeRequest.reviewed_by == user.id)).delete()
             db.query(DBSession).filter(DBSession.user_id == user.id).delete()
@@ -279,3 +287,169 @@ def test_full_document_review_and_info_request_lifecycle(db_session):
         cookies=cookies_cust_a
     )
     assert cust_rev_res.status_code == 403
+
+
+def test_m05_4_document_review_replacement_lifecycle(db_session):
+    """
+    M05.4 Business Rule Verification:
+    1. Employee reviews valid document -> ACCEPTED
+    2. Employee reviews deficient document without mandatory reason -> 400 Bad Request
+    3. Employee reviews deficient document with reason -> REQUIRES_REUPLOAD
+    4. Customer sees DOCUMENT_REPLACEMENT_REQUIRED action & application details
+    5. Customer uploads replacement -> reuses SAME Document ID, becomes UPLOADED
+    6. Old file cleaned up on disk, new file served at /api/documents/{id}/content
+    7. Review notes/reviewer cleared on replacement
+    8. Employee reviews replacement again -> ACCEPTED
+    9. Final state: both documents ACCEPTED, review readiness shows all verified
+    """
+    # 1. Setup Customer and Employee
+    customer, cookies_cust = create_user_helper(db_session, "lifo_cust", Role.CUSTOMER.value)
+    employee, cookies_emp = create_user_helper(db_session, "lifo_emp", Role.EMPLOYEE.value)
+
+    # 2. Customer creates application
+    app_res = client.post(
+        "/api/applications/",
+        json={
+            "loan_type": "HOME_PURCHASE",
+            "requested_amount": 5000000,
+            "tenure": 120,
+            "purpose": "Primary residential purchase",
+            "employment_info": "Salaried",
+            "income_info": "1800000",
+            "existing_liabilities": "None"
+        },
+        cookies=cookies_cust
+    )
+    assert app_res.status_code == 200
+    app_id = app_res.json()["id"]
+
+    # 3. Customer uploads Doc 1 (Identity Proof) & Doc 2 (Income Proof)
+    pdf_doc1 = b"%PDF-1.4 Valid Aadhaar Identity Proof Content"
+    up1 = client.post(
+        "/api/documents/",
+        data={"document_type": "IDENTITY_PROOF", "application_id": str(app_id)},
+        files={"file": ("identity.pdf", io.BytesIO(pdf_doc1), "application/pdf")},
+        cookies=cookies_cust
+    )
+    assert up1.status_code == 200
+    doc_1_id = up1.json()["id"]
+
+    pdf_doc2_initial = b"%PDF-1.4 Blurry and illegible salary slip content"
+    up2 = client.post(
+        "/api/documents/",
+        data={"document_type": "INCOME_PROOF", "application_id": str(app_id)},
+        files={"file": ("salary_slip_blurry.pdf", io.BytesIO(pdf_doc2_initial), "application/pdf")},
+        cookies=cookies_cust
+    )
+    assert up2.status_code == 200
+    doc_2_id = up2.json()["id"]
+
+    # 4. Customer submits application
+    sub = client.post(f"/api/applications/{app_id}/submit", cookies=cookies_cust)
+    assert sub.status_code == 200
+
+    # 5. Employee transitions application to UNDER_REVIEW
+    trans = client.post(f"/api/employee/applications/{app_id}/transition-review", cookies=cookies_emp)
+    assert trans.status_code == 200
+
+    # 6. Step 1: Valid document -> ACCEPTED
+    rev1 = client.post(
+        f"/api/employee/documents/{doc_1_id}/review",
+        json={"status": "ACCEPTED", "reason": "Government ID clear and verified"},
+        cookies=cookies_emp
+    )
+    assert rev1.status_code == 200
+    assert rev1.json()["status"] == DocumentStatus.ACCEPTED.value
+
+    # 7. Step 2a: Invalid document review without mandatory reason -> 400 Bad Request
+    fail_rev = client.post(
+        f"/api/employee/documents/{doc_2_id}/review",
+        json={"status": "REQUIRES_REUPLOAD", "reason": "   "},
+        cookies=cookies_emp
+    )
+    assert fail_rev.status_code == 400
+    assert "reason" in fail_rev.json()["detail"].lower()
+
+    # 8. Step 2b: Invalid document review with reason -> REQUIRES_REUPLOAD
+    rev2 = client.post(
+        f"/api/employee/documents/{doc_2_id}/review",
+        json={"status": "REQUIRES_REUPLOAD", "reason": "Illegible salary slip. Page 2 numbers unreadable."},
+        cookies=cookies_emp
+    )
+    assert rev2.status_code == 200
+    assert rev2.json()["status"] == DocumentStatus.REQUIRES_REUPLOAD.value
+    assert rev2.json()["review_notes"] == "Illegible salary slip. Page 2 numbers unreadable."
+
+    # 9. Step 3: Customer sees DOCUMENT REPLACEMENT REQUIRED
+    # Check customer actions endpoint
+    actions_res = client.get("/api/customer/actions", cookies=cookies_cust)
+    assert actions_res.status_code == 200
+    actions = actions_res.json()["actions"]
+    rep_action = next((a for a in actions if a.get("type") == "DOCUMENT_REPLACEMENT_REQUIRED"), None)
+    assert rep_action is not None
+    assert rep_action["document_id"] == str(doc_2_id)
+    assert "Illegible salary slip" in rep_action["deficiency_reason"]
+
+    # Check customer application dossier endpoint
+    cust_app = client.get(f"/api/applications/{app_id}", cookies=cookies_cust)
+    assert cust_app.status_code == 200
+    cust_docs = cust_app.json()["documents"]
+    doc2_cust = next((d for d in cust_docs if d["id"] == str(doc_2_id)), None)
+    assert doc2_cust is not None
+    assert doc2_cust["status"] == DocumentStatus.REQUIRES_REUPLOAD.value
+
+    # 10. Step 4: Customer uploads replacement document
+    pdf_doc2_replacement = b"%PDF-1.4 Clear and complete replacement salary slip with company stamp"
+    replace_res = client.post(
+        "/api/documents/",
+        data={
+            "document_type": "INCOME_PROOF",
+            "application_id": str(app_id),
+            "replaces_document_id": str(doc_2_id)
+        },
+        files={"file": ("salary_slip_clear.pdf", io.BytesIO(pdf_doc2_replacement), "application/pdf")},
+        cookies=cookies_cust
+    )
+    assert replace_res.status_code == 200
+    replace_data = replace_res.json()
+
+    # Replacement MUST reuse the same Document ID
+    assert replace_data["id"] == str(doc_2_id)
+    # Replacement becomes UPLOADED
+    assert replace_data["status"] == DocumentStatus.UPLOADED.value
+
+    # Check DB record for doc 2: only 1 record exists, status = UPLOADED, notes reset
+    db_doc2 = db_session.query(Document).filter(Document.id == uuid.UUID(doc_2_id)).first()
+    assert db_doc2 is not None
+    assert db_doc2.status == DocumentStatus.UPLOADED.value
+    assert db_doc2.review_notes is None
+    assert db_doc2.reviewed_by is None
+    assert db_doc2.reviewed_at is None
+
+    # Total documents for application remains exactly 2 (no duplicate rows)
+    total_docs = db_session.query(Document).filter(Document.application_id == uuid.UUID(app_id)).count()
+    assert total_docs == 2
+
+    # 11. Step 5: Employee serves the replacement file content
+    content_res = client.get(f"/api/documents/{doc_2_id}/content", cookies=cookies_emp)
+    assert content_res.status_code == 200
+    assert content_res.content == pdf_doc2_replacement
+    assert content_res.content != pdf_doc2_initial
+
+    # 12. Step 6: Employee reviews the replacement again -> ACCEPTED
+    rev2_final = client.post(
+        f"/api/employee/documents/{doc_2_id}/review",
+        json={"status": "ACCEPTED", "reason": "Replacement salary slip verified and numbers reconciled"},
+        cookies=cookies_emp
+    )
+    assert rev2_final.status_code == 200
+    assert rev2_final.json()["status"] == DocumentStatus.ACCEPTED.value
+
+    # 13. Step 7: Check review readiness: all documents are now verified
+    readiness_res = client.get(f"/api/employee/applications/{app_id}/review-readiness", cookies=cookies_emp)
+    assert readiness_res.status_code == 200
+    readiness = readiness_res.json()
+    assert any("submitted document(s) verified" in c for c in readiness["completed_checks"])
+    assert not any("require re-upload" in b.lower() for b in readiness["blocking_reasons"])
+    assert not any("awaiting operational review" in b.lower() for b in readiness["blocking_reasons"])
+

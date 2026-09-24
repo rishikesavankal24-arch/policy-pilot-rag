@@ -384,19 +384,19 @@ export default function EmployeeDashboardPage() {
           </div>
         </div>
 
-        {/* Institutional Governance Notice Strip */}
+        {/* Internal Governance Notice Strip */}
         <div className="p-4 rounded-xl bg-[#0A1224] border border-slate-800 text-slate-400 text-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Shield className="h-4 w-4 text-amber-400 shrink-0" />
             <span>
-              <strong>Governance Protocol:</strong> All underwriter actions are subject to non-repudiation audit logging under Section 65B of the Indian Evidence Act.
+              <strong>Governance Protocol:</strong> All underwriter actions and review decisions are recorded in the internal audit trail.
             </span>
           </div>
           <Link
             href="/employee/compliance"
             className="text-amber-400 hover:text-amber-300 font-medium text-xs flex items-center gap-1 shrink-0"
           >
-            Review Regulatory Directives →
+            Review Policy Directives →
           </Link>
         </div>
 

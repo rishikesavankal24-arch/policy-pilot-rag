@@ -11,7 +11,9 @@ from app.db.models import (
     DocumentStatus, 
     Session as DBSession,
     EmployeeRequest,
-    EmployeeRequestStatus
+    EmployeeRequestStatus,
+    ApplicationAuditEvent,
+    Notification
 )
 from app.core.security import create_user_session
 from app.api.documents import STORAGE_DIR, sanitize_filename
@@ -35,9 +37,15 @@ def db_session():
                 if doc_dir.exists():
                     import shutil
                     shutil.rmtree(doc_dir, ignore_errors=True)
+            apps = db.query(Application).filter(Application.user_id == user.id).all()
+            for a in apps:
+                db.query(ApplicationAuditEvent).filter(ApplicationAuditEvent.application_id == a.id).delete()
+            db.query(ApplicationAuditEvent).filter(ApplicationAuditEvent.user_id == user.id).delete()
+            db.query(Document).filter(Document.reviewed_by == user.id).update({Document.reviewed_by: None})
             db.query(Document).filter(Document.user_id == user.id).delete()
             db.query(Application).filter(Application.user_id == user.id).delete()
             db.query(EmployeeRequest).filter(EmployeeRequest.user_id == user.id).delete()
+            db.query(Notification).filter(Notification.user_id == user.id).delete()
             db.query(DBSession).filter(DBSession.user_id == user.id).delete()
             db.query(User).filter(User.id == user.id).delete()
         db.commit()
@@ -354,3 +362,240 @@ def test_filename_sanitization_prevents_path_traversal():
     assert sanitize_filename("/absolute/path/doc.pdf") == "doc.pdf"
     assert sanitize_filename("C:\\users\\admin\\test.pdf") == "test.pdf"
     assert sanitize_filename("normal_file.pdf") == "normal_file.pdf"
+
+
+def test_document_replacement_serves_new_content(db_session):
+    """
+    M05.4 E2E replacement test:
+    1. Customer uploads PDF A (ORIGINAL DOCUMENT -- TEST A).
+    2. Employee views PDF A.
+    3. Employee marks document as REQUIRES_REUPLOAD.
+    4. Customer replaces document with PDF B (REPLACEMENT DOCUMENT -- TEST B).
+    5. Assert same Document.id, status=UPLOADED, review_notes reset.
+    6. Assert physical file storage updated and old file cleaned up.
+    7. Employee GET /api/documents/{doc_id}/content MUST return PDF B bytes, NOT PDF A.
+    8. Assert anti-cache headers are returned.
+    9. Assert DOCUMENT_REPLACED audit event is logged.
+    10. Assert unauthorized access is blocked (403).
+    """
+    cust, cust_token = create_user(db_session, "rep_cust")
+    emp, emp_token = make_verified_employee(db_session, "rep_emp")
+    other_cust, other_cust_token = create_user(db_session, "other_cust")
+
+    cust_client = TestClient(app, cookies={"session_id": cust_token})
+    emp_client = TestClient(app, cookies={"session_id": emp_token})
+    other_client = TestClient(app, cookies={"session_id": other_cust_token})
+
+    # Create application
+    app_record = Application(
+        id=uuid.uuid4(),
+        user_id=cust.id,
+        loan_type="Home Loan",
+        requested_amount=5000000.0,
+        tenure=240,
+        purpose="Purchase apartment",
+        status=ApplicationStatus.SUBMITTED.value
+    )
+    db_session.add(app_record)
+    db_session.commit()
+
+    # Distinct byte payloads
+    pdf_a_bytes = b"%PDF-1.4\nORIGINAL DOCUMENT -- TEST A\n%%EOF"
+    pdf_b_bytes = b"%PDF-1.4\nREPLACEMENT DOCUMENT -- TEST B\n%%EOF"
+
+    # 1. Customer uploads PDF A
+    upload_res = cust_client.post(
+        "/api/documents/",
+        data={
+            "document_type": "INCOME_PROOF",
+            "application_id": str(app_record.id)
+        },
+        files={"file": ("original_income.pdf", io.BytesIO(pdf_a_bytes), "application/pdf")}
+    )
+    assert upload_res.status_code == 200, upload_res.text
+    doc_id = upload_res.json()["id"]
+
+    # 2. Employee views PDF A
+    view_res_1 = emp_client.get(f"/api/documents/{doc_id}/content")
+    assert view_res_1.status_code == 200
+    assert view_res_1.content == pdf_a_bytes
+    assert "no-cache" in view_res_1.headers.get("cache-control", "").lower()
+
+    # 3. Employee marks document as REQUIRES_REUPLOAD
+    review_res = emp_client.post(
+        f"/api/employee/documents/{doc_id}/review",
+        json={"status": "REQUIRES_REUPLOAD", "reason": "Blurry salary slip. Please upload clear copy."}
+    )
+    assert review_res.status_code == 200
+
+    doc_in_db = db_session.query(Document).filter(Document.id == uuid.UUID(doc_id)).first()
+    assert doc_in_db.status == DocumentStatus.REQUIRES_REUPLOAD.value
+    assert doc_in_db.review_notes == "Blurry salary slip. Please upload clear copy."
+
+    # 4. Customer uploads replacement PDF B
+    replace_res = cust_client.post(
+        "/api/documents/",
+        data={
+            "document_type": "INCOME_PROOF",
+            "application_id": str(app_record.id),
+            "replaces_document_id": doc_id
+        },
+        files={"file": ("replacement_income.pdf", io.BytesIO(pdf_b_bytes), "application/pdf")}
+    )
+    assert replace_res.status_code == 200, replace_res.text
+    rep_data = replace_res.json()
+
+    # 5. Assert same Document.id
+    assert rep_data["id"] == doc_id
+
+    # 6. Assert DB state after replacement
+    db_session.refresh(doc_in_db)
+    assert str(doc_in_db.id) == doc_id
+    assert doc_in_db.status == DocumentStatus.UPLOADED.value
+    assert doc_in_db.review_notes is None
+    assert doc_in_db.reviewed_by is None
+    assert doc_in_db.reviewed_at is None
+    assert doc_in_db.file_url == f"documents/{doc_id}/replacement_income.pdf"
+
+    # 7. Assert physical storage updated
+    stored_file = STORAGE_DIR / doc_id / "replacement_income.pdf"
+    assert stored_file.exists(), f"Expected {stored_file} to exist on disk"
+    assert stored_file.read_bytes() == pdf_b_bytes
+
+    # Old file should have been cleaned up
+    old_file = STORAGE_DIR / doc_id / "original_income.pdf"
+    assert not old_file.exists(), f"Old file {old_file} should have been unlinked"
+
+    # 8. Employee calls GET /api/documents/{doc_id}/content
+    view_res_2 = emp_client.get(f"/api/documents/{doc_id}/content")
+    assert view_res_2.status_code == 200
+    assert view_res_2.content == pdf_b_bytes, "Content endpoint must return the replacement PDF bytes"
+    assert view_res_2.content != pdf_a_bytes, "Content endpoint MUST NOT return the original PDF bytes"
+    assert "no-cache" in view_res_2.headers.get("cache-control", "").lower()
+    assert view_res_2.headers.get("pragma") == "no-cache"
+
+    # 9. Assert DOCUMENT_REPLACED audit event exists
+    audit = db_session.query(ApplicationAuditEvent).filter(
+        ApplicationAuditEvent.application_id == app_record.id,
+        ApplicationAuditEvent.event_type == "DOCUMENT_REPLACED"
+    ).first()
+    assert audit is not None
+    assert "income" in audit.description.lower()
+
+    # 10. Security assertion: other customer cannot access this document
+    unauth_res = other_client.get(f"/api/documents/{doc_id}/content")
+    assert unauth_res.status_code == 403
+
+    # 11. Assert exactly 1 document record exists for this application (no duplicate row created)
+    doc_count = db_session.query(Document).filter(Document.application_id == app_record.id).count()
+    assert doc_count == 1
+
+
+def test_invalid_document_replacement_attempts(db_session):
+    """
+    Verify rejection of invalid document replacement attempts:
+    - wrong document ID (404)
+    - document belonging to another customer (403)
+    - document belonging to another application (400)
+    - document not in REQUIRES_REUPLOAD state (400)
+    """
+    cust1, cust1_token = create_user(db_session, "inv_c1")
+    cust2, cust2_token = create_user(db_session, "inv_c2")
+    emp, emp_token = make_verified_employee(db_session, "inv_emp")
+
+    c1_client = TestClient(app, cookies={"session_id": cust1_token})
+    c2_client = TestClient(app, cookies={"session_id": cust2_token})
+    emp_client = TestClient(app, cookies={"session_id": emp_token})
+
+    # App 1 for Cust 1
+    app1 = Application(
+        id=uuid.uuid4(),
+        user_id=cust1.id,
+        loan_type="Personal Loan",
+        requested_amount=100000.0,
+        tenure=12,
+        purpose="Medical expense",
+        status=ApplicationStatus.SUBMITTED.value
+    )
+    # App 2 for Cust 1
+    app2 = Application(
+        id=uuid.uuid4(),
+        user_id=cust1.id,
+        loan_type="Personal Loan",
+        requested_amount=200000.0,
+        tenure=24,
+        purpose="Travel",
+        status=ApplicationStatus.SUBMITTED.value
+    )
+    db_session.add_all([app1, app2])
+    db_session.commit()
+
+    # Upload document for App 1
+    up_res = c1_client.post(
+        "/api/documents/",
+        data={"document_type": "ID_PROOF", "application_id": str(app1.id)},
+        files={"file": ("aadhaar.pdf", io.BytesIO(b"%PDF-1.4\noriginal\n%%EOF"), "application/pdf")}
+    )
+    assert up_res.status_code == 200
+    doc1_id = up_res.json()["id"]
+
+    dummy_pdf = io.BytesIO(b"%PDF-1.4\nreplacement attempt\n%%EOF")
+
+    # Attempt 1: Non-existent document ID -> 404
+    non_existent_id = str(uuid.uuid4())
+    res_404 = c1_client.post(
+        "/api/documents/",
+        data={"document_type": "ID_PROOF", "application_id": str(app1.id), "replaces_document_id": non_existent_id},
+        files={"file": ("rep.pdf", io.BytesIO(b"%PDF-1.4\nrep\n%%EOF"), "application/pdf")}
+    )
+    assert res_404.status_code == 404
+    assert "not found" in res_404.json()["detail"].lower()
+
+    # Attempt 2: Document is in UPLOADED status, NOT REQUIRES_REUPLOAD -> 400
+    res_not_deficient = c1_client.post(
+        "/api/documents/",
+        data={"document_type": "ID_PROOF", "application_id": str(app1.id), "replaces_document_id": doc1_id},
+        files={"file": ("rep.pdf", io.BytesIO(b"%PDF-1.4\nrep\n%%EOF"), "application/pdf")}
+    )
+    assert res_not_deficient.status_code == 400
+    assert "only documents requiring re-upload" in res_not_deficient.json()["detail"].lower()
+
+    # Now mark doc1 as REQUIRES_REUPLOAD
+    rev_res = emp_client.post(
+        f"/api/employee/documents/{doc1_id}/review",
+        json={"status": "REQUIRES_REUPLOAD", "reason": "Unreadable"}
+    )
+    assert rev_res.status_code == 200
+
+    # App for Cust 2
+    app_c2 = Application(
+        id=uuid.uuid4(),
+        user_id=cust2.id,
+        loan_type="Personal Loan",
+        requested_amount=150000.0,
+        tenure=12,
+        purpose="Medical",
+        status=ApplicationStatus.SUBMITTED.value
+    )
+    db_session.add(app_c2)
+    db_session.commit()
+
+    # Attempt 3: Another customer tries to replace Cust 1's document -> 403
+    res_unauth = c2_client.post(
+        "/api/documents/",
+        data={"document_type": "ID_PROOF", "application_id": str(app_c2.id), "replaces_document_id": doc1_id},
+        files={"file": ("rep.pdf", io.BytesIO(b"%PDF-1.4\nrep\n%%EOF"), "application/pdf")}
+    )
+    assert res_unauth.status_code == 403
+    assert "cannot replace a document belonging to another user" in res_unauth.json()["detail"].lower()
+
+    # Attempt 4: Cust 1 specifies wrong application_id (App 2 instead of App 1) -> 400
+    res_wrong_app = c1_client.post(
+        "/api/documents/",
+        data={"document_type": "ID_PROOF", "application_id": str(app2.id), "replaces_document_id": doc1_id},
+        files={"file": ("rep.pdf", io.BytesIO(b"%PDF-1.4\nrep\n%%EOF"), "application/pdf")}
+    )
+    assert res_wrong_app.status_code == 400
+    assert "does not belong to the specified application" in res_wrong_app.json()["detail"].lower()
+
+
