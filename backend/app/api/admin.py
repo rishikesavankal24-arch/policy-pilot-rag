@@ -1,13 +1,20 @@
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, HTTPException, Body, UploadFile, File, Form, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 from pydantic import BaseModel
 from typing import Optional, List
 import uuid
 
-from app.db.models import User, EmployeeRequest, EmployeeRequestStatus, Role, OnboardingStatus, Application
+from app.db.models import User, EmployeeRequest, EmployeeRequestStatus, Role, OnboardingStatus, Application, Policy, PolicyVersion
 from app.core.security import get_db
 from app.api.deps import require_permissions, get_current_active_user
+from app.services.policy_file_service import PolicyFileService
+from app.services.policy_metadata_service import (
+    PolicyMetadataValidationError,
+    PolicyMetadataNotFoundError,
+    PolicyMetadataConflictError
+)
 
 router = APIRouter()
 
@@ -424,3 +431,108 @@ def get_customer(
         created_at=user.created_at,
         last_login_at=user.last_login_at
     )
+
+
+# ==============================================================================
+# M08.3 — Policy Document Upload & File Access (Admin Controlled)
+# ==============================================================================
+
+class PolicyVersionUploadResponse(BaseModel):
+    id: str
+    policy_id: str
+    version_number: str
+    changelog: Optional[str] = None
+    file_url: Optional[str] = None
+    file_hash: Optional[str] = None
+    file_size_bytes: Optional[int] = None
+    page_count: Optional[int] = None
+    effective_from: Optional[datetime] = None
+    effective_to: Optional[datetime] = None
+    created_by: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+@router.post("/policies/{policy_id}/versions/upload", response_model=PolicyVersionUploadResponse, status_code=status.HTTP_201_CREATED)
+async def upload_policy_version_document(
+    policy_id: uuid.UUID,
+    file: UploadFile = File(...),
+    changelog: Optional[str] = Form(None),
+    effective_from: Optional[datetime] = Form(None),
+    effective_to: Optional[datetime] = Form(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions(["ADMIN_POLICY_MANAGEMENT"]))
+):
+    """
+    Authorized admin endpoint for uploading and attaching a validated policy source document.
+    Enforces ADMIN_POLICY_MANAGEMENT permission.
+    """
+    try:
+        file_bytes = await file.read()
+        version = PolicyFileService.attach_policy_version_document(
+            db=db,
+            policy_id=policy_id,
+            filename=file.filename or "policy_document.pdf",
+            file_bytes=file_bytes,
+            changelog=changelog,
+            effective_from=effective_from,
+            effective_to=effective_to,
+            created_by=current_user.id
+        )
+        return PolicyVersionUploadResponse(
+            id=str(version.id),
+            policy_id=str(version.policy_id),
+            version_number=version.version_number,
+            changelog=version.changelog,
+            file_url=version.file_url,
+            file_hash=version.file_hash,
+            file_size_bytes=version.file_size_bytes,
+            page_count=version.page_count,
+            effective_from=version.effective_from,
+            effective_to=version.effective_to,
+            created_by=str(version.created_by) if version.created_by else None,
+            created_at=version.created_at
+        )
+    except PolicyMetadataNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except PolicyMetadataConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except PolicyMetadataValidationError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get("/policies/{policy_id}/versions/{version_id}/file")
+def get_policy_version_document_file(
+    policy_id: uuid.UUID,
+    version_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions(["ADMIN_POLICY_MANAGEMENT"]))
+):
+    """
+    Authorized endpoint to retrieve the stored policy document file.
+    Does not expose arbitrary filesystem paths.
+    """
+    try:
+        file_path, version = PolicyFileService.get_policy_version_file(
+            db=db,
+            policy_id=policy_id,
+            version_id=version_id
+        )
+        media_type = "application/pdf"
+        if file_path.suffix.lower() == ".png":
+            media_type = "image/png"
+        elif file_path.suffix.lower() in (".jpg", ".jpeg"):
+            media_type = "image/jpeg"
+
+        return FileResponse(
+            path=str(file_path),
+            filename=file_path.name,
+            media_type=media_type
+        )
+    except PolicyMetadataNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
