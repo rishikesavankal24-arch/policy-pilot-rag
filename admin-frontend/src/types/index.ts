@@ -73,3 +73,86 @@ export interface CustomerDetail extends CustomerItem {
   language: string | null;
   applications: CustomerApplicationSummary[];
 }
+
+// =============================================================================
+// M08 Policy & Regulatory Management Types
+// =============================================================================
+
+export type PolicyStatus = "DRAFT" | "PUBLISHED" | "ACTIVE" | "SUPERSEDED" | "ARCHIVED";
+
+export interface RegulatoryAuthority {
+  id: string;
+  name: string;
+  short_name: string;
+  authority_type: string;
+  jurisdiction: string | null;
+  website_url: string | null;
+  description: string | null;
+  is_active: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface Policy {
+  id: string;
+  policy_code: string;
+  title: string;
+  description: string | null;
+  category: string | null;
+  policy_type: string | null;
+  status: PolicyStatus;
+  institution: string | null;
+  jurisdiction: string | null;
+  current_version_id: string | null;
+  regulatory_authority_id: string | null;
+  created_by: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface PolicyListResponse {
+  items: Policy[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export interface PolicyApplicability {
+  id: string;
+  policy_id: string;
+  institution: string | null;
+  jurisdiction: string | null;
+  loan_type: string | null;
+  department: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface PolicyVersionHistoryItem {
+  id: string;
+  policy_id: string;
+  version_number: string;
+  status_context: string;
+  changelog: string | null;
+  file_url: string | null;
+  file_hash: string | null;
+  file_size_bytes: number | null;
+  page_count: number | null;
+  effective_from: string | null;
+  effective_to: string | null;
+  created_by: string | null;
+  published_by: string | null;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface PolicyLifecycleResponse {
+  id: string;
+  policy_code: string;
+  title: string;
+  status: PolicyStatus;
+  current_version_id: string | null;
+  updated_at: string | null;
+}
+

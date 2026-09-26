@@ -18,7 +18,9 @@ import {
   Menu, 
   X,
   Lock,
-  ChevronRight
+  ChevronRight,
+  BookOpen,
+  Landmark
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -44,6 +46,13 @@ export function AdminLayout({ children }: AdminLayoutProps) {
       title: "OVERVIEW",
       items: [
         { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+      ]
+    },
+    {
+      title: "POLICY MANAGEMENT",
+      items: [
+        { name: "Policies", href: "/policies", icon: BookOpen },
+        { name: "Regulatory Authorities", href: "/regulatory-authorities", icon: Landmark },
       ]
     },
     {

@@ -13,13 +13,18 @@ import {
   Activity, 
   ArrowRight, 
   Building2,
-  RefreshCw
+  RefreshCw,
+  BookOpen,
+  Landmark
 } from "lucide-react";
+import { Policy, RegulatoryAuthority } from "@/types";
 
 export default function AdminDashboardPage() {
   const [requests, setRequests] = useState<EmployeeRequestItem[]>([]);
   const [employees, setEmployees] = useState<EmployeeItem[]>([]);
   const [customers, setCustomers] = useState<CustomerItem[]>([]);
+  const [policies, setPolicies] = useState<Policy[]>([]);
+  const [authorities, setAuthorities] = useState<RegulatoryAuthority[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -27,14 +32,18 @@ export default function AdminDashboardPage() {
     try {
       setLoading(true);
       setError(null);
-      const [reqData, empData, custData] = await Promise.all([
+      const [reqData, empData, custData, polData, authData] = await Promise.all([
         adminApi.getEmployeeRequests().catch(() => []),
         adminApi.getEmployees().catch(() => []),
-        adminApi.getCustomers().catch(() => [])
+        adminApi.getCustomers().catch(() => []),
+        adminApi.getPolicies({ page_size: 100 }).catch(() => ({ items: [], total: 0 })),
+        adminApi.getRegulatoryAuthorities().catch(() => [])
       ]);
       setRequests(reqData || []);
       setEmployees(empData || []);
       setCustomers(custData || []);
+      setPolicies(polData?.items || []);
+      setAuthorities(authData || []);
     } catch (err: any) {
       setError(err.message || "Failed to load administrative overview.");
     } finally {
@@ -164,6 +173,69 @@ export default function AdminDashboardPage() {
               className="mt-1 w-full py-2 px-3 bg-slate-50 hover:bg-slate-100 text-slate-800 border border-slate-200 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
             >
               <span>View Customer Registry</span>
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          </div>
+        </div>
+
+        {/* Policy & Regulation Governance Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* Policies Card */}
+          <div className="p-5 bg-white border border-slate-200 rounded-xl shadow-xs space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 font-mono">
+                Policy Repository
+              </span>
+              <BookOpen className="h-4 w-4 text-amber-600" />
+            </div>
+            <div className="flex items-baseline gap-2">
+              <span className="text-3xl font-bold text-slate-900">
+                {loading ? "..." : policies.length}
+              </span>
+              <span className="text-xs text-amber-700 font-semibold font-mono">
+                {loading ? "" : `${policies.filter((p) => p.status === "ACTIVE").length} Active in Force`}
+              </span>
+            </div>
+            <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
+              <span className="text-slate-500">Draft policies pending:</span>
+              <span className="font-bold text-slate-700 font-mono">
+                {policies.filter((p) => p.status === "DRAFT").length}
+              </span>
+            </div>
+            <Link
+              href="/policies"
+              className="mt-1 w-full py-2 px-3 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+            >
+              <span>Manage Policies</span>
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          </div>
+
+          {/* Regulatory Authorities Card */}
+          <div className="p-5 bg-white border border-slate-200 rounded-xl shadow-xs space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 font-mono">
+                Regulatory Authorities
+              </span>
+              <Landmark className="h-4 w-4 text-slate-700" />
+            </div>
+            <div className="flex items-baseline gap-2">
+              <span className="text-3xl font-bold text-slate-900">
+                {loading ? "..." : authorities.length}
+              </span>
+              <span className="text-xs text-emerald-700 font-semibold font-mono">
+                {loading ? "" : `${authorities.filter((a) => a.is_active).length} Active Authorities`}
+              </span>
+            </div>
+            <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
+              <span className="text-slate-500">Governing jurisdictions:</span>
+              <span className="font-bold text-slate-700 font-mono">IN, Global</span>
+            </div>
+            <Link
+              href="/regulatory-authorities"
+              className="mt-1 w-full py-2 px-3 bg-slate-50 hover:bg-slate-100 text-slate-800 border border-slate-200 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+            >
+              <span>Manage Authorities</span>
               <ArrowRight className="h-3.5 w-3.5" />
             </Link>
           </div>
