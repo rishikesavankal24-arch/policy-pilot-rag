@@ -24,6 +24,7 @@ app = FastAPI(title="PolicyPilot API", description="Banking Policy & Compliance 
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
 app.include_router(onboarding_router, prefix="/onboarding", tags=["onboarding"])
 app.include_router(admin_router, prefix="/admin", tags=["admin"])
+app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
 app.include_router(customer_router, prefix="/api/customer", tags=["customer"])
 app.include_router(employee_router, prefix="/api/employee", tags=["employee"])
 app.include_router(applications_router, prefix="/api/applications", tags=["applications"])
