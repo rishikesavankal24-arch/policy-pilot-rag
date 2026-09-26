@@ -27,7 +27,8 @@ import {
   BarChart3,
   Search,
   Lock,
-  ArrowRight
+  ArrowRight,
+  BookOpen
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/i18n/LanguageContext";
@@ -158,6 +159,9 @@ export function EmployeeLayout({ children }: EmployeeLayoutProps) {
     if (href === "/employee/applications") {
       return pathname === "/employee/applications" || (pathname?.startsWith("/employee/applications/") && !pathname?.includes("queue"));
     }
+    if (href === "/employee/policies") {
+      return pathname === "/employee/policies" || pathname?.startsWith("/employee/policies/");
+    }
     return pathname === href || pathname?.startsWith(`${href}/`);
   };
 
@@ -172,6 +176,12 @@ export function EmployeeLayout({ children }: EmployeeLayoutProps) {
         { name: t("employeeNav.documents"), href: "/employee/documents", icon: FileText },
         { name: t("employeeNav.compliance"), href: "/employee/compliance", icon: Shield },
         { name: t("employeeNav.notifications"), href: "/employee/notifications", icon: Bell },
+      ]
+    },
+    {
+      label: "POLICIES",
+      items: [
+        { name: "Policy Catalog", href: "/employee/policies", icon: BookOpen },
       ]
     },
     {
@@ -265,6 +275,55 @@ export function EmployeeLayout({ children }: EmployeeLayoutProps) {
                 </span>
               </div>
             </Link>
+
+            {/* Desktop Navigation Links */}
+            <nav className="hidden lg:flex items-center gap-1 ml-6 border-l border-slate-800 pl-6">
+              <Link
+                href="/employee/dashboard"
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-medium transition-colors",
+                  pathname === "/employee/dashboard"
+                    ? "bg-amber-400/10 text-amber-300 font-semibold"
+                    : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
+                )}
+              >
+                Dashboard
+              </Link>
+              <Link
+                href="/employee/applications"
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-medium transition-colors",
+                  pathname?.startsWith("/employee/applications")
+                    ? "bg-amber-400/10 text-amber-300 font-semibold"
+                    : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
+                )}
+              >
+                Applications
+              </Link>
+              <Link
+                href="/employee/policies"
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5",
+                  pathname?.startsWith("/employee/policies")
+                    ? "bg-amber-400/15 text-amber-300 border border-amber-400/30 font-semibold"
+                    : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
+                )}
+              >
+                <BookOpen className="h-3.5 w-3.5 text-amber-400" />
+                <span>Policy Catalog</span>
+              </Link>
+              <Link
+                href="/employee/compliance"
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-medium transition-colors",
+                  pathname === "/employee/compliance"
+                    ? "bg-amber-400/10 text-amber-300 font-semibold"
+                    : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
+                )}
+              >
+                Compliance
+              </Link>
+            </nav>
           </div>
 
           {/* Right: Notification Bell & Officer Profile Area */}

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from uuid import UUID
@@ -1865,4 +1866,265 @@ def reset_application_review_readiness(
         db.refresh(app)
 
     return calculate_review_readiness(app, db)
+
+
+# ==============================================================================
+# M08.7 — Employee Policy Catalog Schemas & Endpoints
+# ==============================================================================
+
+from app.services.employee_policy_service import (
+    EmployeePolicyService,
+    EmployeePolicyNotFoundError,
+    EmployeePolicyAccessDeniedError
+)
+
+
+class EmployeeRegulatoryAuthoritySummary(BaseModel):
+    id: str
+    name: str
+    short_name: str
+    authority_type: str
+    jurisdiction: Optional[str] = None
+    website_url: Optional[str] = None
+    description: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EmployeePolicyListItem(BaseModel):
+    id: str
+    policy_code: str
+    title: str
+    description: Optional[str] = None
+    category: Optional[str] = None
+    policy_type: Optional[str] = None
+    institution: Optional[str] = None
+    jurisdiction: Optional[str] = None
+    status: str
+    current_version_id: Optional[str] = None
+    current_version_number: Optional[str] = None
+    effective_from: Optional[datetime] = None
+    effective_to: Optional[datetime] = None
+    regulatory_authority: Optional[EmployeeRegulatoryAuthoritySummary] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EmployeePolicyListResponse(BaseModel):
+    items: List[EmployeePolicyListItem]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class EmployeeApplicabilitySummary(BaseModel):
+    id: str
+    institution: Optional[str] = None
+    jurisdiction: Optional[str] = None
+    loan_type: Optional[str] = None
+    department: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EmployeePolicyVersionSummary(BaseModel):
+    id: str
+    version_number: str
+    changelog: Optional[str] = None
+    page_count: Optional[int] = None
+    file_size_bytes: Optional[int] = None
+    file_size: Optional[int] = None
+    effective_from: Optional[datetime] = None
+    effective_to: Optional[datetime] = None
+    has_file: bool = False
+    status: Optional[str] = None
+    published_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EmployeePolicyDetail(BaseModel):
+    id: str
+    policy_code: str
+    title: str
+    description: Optional[str] = None
+    category: Optional[str] = None
+    policy_type: Optional[str] = None
+    institution: Optional[str] = None
+    jurisdiction: Optional[str] = None
+    status: str
+    current_version: Optional[EmployeePolicyVersionSummary] = None
+    current_version_id: Optional[str] = None
+    current_version_number: Optional[str] = None
+    current_version_changelog: Optional[str] = None
+    current_version_page_count: Optional[int] = None
+    current_version_file_size_bytes: Optional[int] = None
+    effective_from: Optional[datetime] = None
+    effective_to: Optional[datetime] = None
+    regulatory_authority: Optional[EmployeeRegulatoryAuthoritySummary] = None
+    applicabilities: List[EmployeeApplicabilitySummary]
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EmployeePolicyHistoryItem(BaseModel):
+    id: str
+    version_number: str
+    status_context: str
+    status: Optional[str] = None
+    changelog: Optional[str] = None
+    file_size_bytes: Optional[int] = None
+    file_size: Optional[int] = None
+    page_count: Optional[int] = None
+    has_file: bool = False
+    effective_from: Optional[datetime] = None
+    effective_to: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    published_at: Optional[datetime] = None
+    download_url: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+@router.get("/policies", response_model=EmployeePolicyListResponse)
+def list_employee_policies(
+    search: Optional[str] = None,
+    category: Optional[str] = None,
+    policy_type: Optional[str] = None,
+    jurisdiction: Optional[str] = None,
+    institution: Optional[str] = None,
+    regulatory_authority_id: Optional[str] = None,
+    loan_type: Optional[str] = None,
+    department: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(require_verified_employee),
+    db: Session = Depends(get_db)
+):
+    """
+    Verified employee catalog listing of ACTIVE policies.
+    Guarantees that only policies in ACTIVE state are discoverable.
+    """
+    try:
+        items, total, total_pages = EmployeePolicyService.list_active_policies(
+            db=db,
+            search=search,
+            category=category,
+            policy_type=policy_type,
+            jurisdiction=jurisdiction,
+            institution=institution,
+            regulatory_authority_id=regulatory_authority_id,
+            loan_type=loan_type,
+            department=department,
+            page=page,
+            page_size=page_size
+        )
+        return EmployeePolicyListResponse(
+            items=items,
+            total=total,
+            page=page,
+            page_size=page_size,
+            total_pages=total_pages
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to query employee policy catalog: {str(e)}"
+        )
+
+
+@router.get("/policies/{policy_id}", response_model=EmployeePolicyDetail)
+def get_employee_policy_detail(
+    policy_id: UUID,
+    current_user: User = Depends(require_verified_employee),
+    db: Session = Depends(get_db)
+):
+    """
+    Retrieve employee-safe detail for an ACTIVE policy.
+    Returns 404 if policy does not exist or is not in ACTIVE state.
+    """
+    try:
+        return EmployeePolicyService.get_active_policy_detail(db=db, policy_id=policy_id)
+    except EmployeePolicyNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Policy not found or not in active regulatory force."
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to retrieve policy details: {str(e)}"
+        )
+
+
+@router.get("/policies/{policy_id}/history", response_model=List[EmployeePolicyHistoryItem])
+def get_employee_policy_history(
+    policy_id: UUID,
+    current_user: User = Depends(require_verified_employee),
+    db: Session = Depends(get_db)
+):
+    """
+    Retrieve version lineage for an ACTIVE policy.
+    Returns 404 if policy does not exist or is not in ACTIVE state.
+    """
+    try:
+        return EmployeePolicyService.get_active_policy_history(db=db, policy_id=policy_id)
+    except EmployeePolicyNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Policy not found or not in active regulatory force."
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to retrieve version history: {str(e)}"
+        )
+
+
+@router.get("/policies/{policy_id}/versions/{version_id}/file")
+def get_employee_policy_document_file(
+    policy_id: UUID,
+    version_id: UUID,
+    current_user: User = Depends(require_verified_employee),
+    db: Session = Depends(get_db)
+):
+    """
+    Authorized document streaming endpoint for verified employees.
+    Verifies that policy is ACTIVE and version exists.
+    """
+    try:
+        file_path, version = EmployeePolicyService.get_active_policy_version_file(
+            db=db,
+            policy_id=policy_id,
+            version_id=version_id
+        )
+
+        media_type = "application/pdf"
+        suffix = file_path.suffix.lower()
+        if suffix == ".png":
+            media_type = "image/png"
+        elif suffix in (".jpg", ".jpeg"):
+            media_type = "image/jpeg"
+
+        return FileResponse(
+            path=str(file_path),
+            filename=file_path.name,
+            media_type=media_type
+        )
+    except EmployeePolicyNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Policy document version not found or not in active force."
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to access policy document: {str(e)}"
+        )
+
 

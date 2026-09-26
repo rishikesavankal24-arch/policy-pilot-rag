@@ -94,16 +94,25 @@ export default function EmployeeCompliancePage() {
           <p className="text-xs text-slate-300 leading-relaxed">
             Automated compliance evaluation via Adaptive RAG (hybrid BM25/vector search, reranking, and automated policy cross-referencing) is scheduled for future implementation in <strong className="text-white">Module M10 & M11</strong>. Currently, all compliance checks and audit evaluations in this workspace operate under manual human officer review.
           </p>
-          <div className="pt-2 flex flex-wrap items-center gap-3 text-[11px] font-mono text-slate-400">
-            <span className="bg-slate-900 px-2 py-1 rounded border border-slate-800">
-              CURRENT MODE: MANUAL_OFFICER_REVIEW
-            </span>
-            <span className="bg-slate-900 px-2 py-1 rounded border border-slate-800">
-              AUTOMATED PIPELINE: SCHEDULED_FOR_M10
-            </span>
-            <span className="bg-slate-900 px-2 py-1 rounded border border-slate-800">
-              STATUS: INTEGRATION_BOUNDARY_ACTIVE
-            </span>
+          <div className="pt-2 flex flex-wrap items-center justify-between gap-3 text-[11px] font-mono text-slate-400">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="bg-slate-900 px-2 py-1 rounded border border-slate-800">
+                CURRENT MODE: MANUAL_OFFICER_REVIEW
+              </span>
+              <span className="bg-slate-900 px-2 py-1 rounded border border-slate-800">
+                AUTOMATED PIPELINE: SCHEDULED_FOR_M10
+              </span>
+              <span className="bg-slate-900 px-2 py-1 rounded border border-slate-800">
+                STATUS: INTEGRATION_BOUNDARY_ACTIVE
+              </span>
+            </div>
+            <Link
+              href="/employee/policies"
+              className="px-3 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded text-xs font-sans font-medium flex items-center gap-1.5 transition-colors"
+            >
+              <BookOpen className="h-3.5 w-3.5" />
+              <span>View Policy Catalog</span>
+            </Link>
           </div>
         </div>
 

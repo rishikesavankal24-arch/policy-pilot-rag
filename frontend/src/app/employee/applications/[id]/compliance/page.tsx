@@ -33,7 +33,8 @@ import {
   CheckSquare,
   AlertCircle,
   RefreshCw,
-  FileCheck
+  FileCheck,
+  BookOpen
 } from "lucide-react";
 import { 
   formatFileSize, 
@@ -700,6 +701,19 @@ export default function EmployeeComplianceWorkspacePage() {
                 <p className="text-xs text-slate-300 leading-relaxed">
                   Adaptive RAG, hybrid BM25 / vector retrieval, evidence reranking, and automated policy cross-referencing are reserved for <strong className="text-white">Module M10</strong> (currently an integration boundary). This compliance review workspace is strictly human-verified. Checklist evaluations and notes are recorded directly to the internal audit trail.
                 </p>
+                <div className="pt-1.5 flex items-center justify-between">
+                  <span className="text-[11px] text-slate-400 font-mono">
+                    Deterministic compliance verification active
+                  </span>
+                  <Link
+                    href="/employee/policies"
+                    target="_blank"
+                    className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 rounded text-xs font-medium transition-colors"
+                  >
+                    <BookOpen className="h-3.5 w-3.5" />
+                    <span>View Policy Catalog</span>
+                  </Link>
+                </div>
               </div>
             </div>
 
