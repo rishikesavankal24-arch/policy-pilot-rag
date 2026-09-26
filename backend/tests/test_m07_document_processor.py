@@ -48,6 +48,7 @@ def db_session():
             for app_obj in apps:
                 db.query(AdditionalInformationRequest).filter(AdditionalInformationRequest.application_id == app_obj.id).delete()
                 db.query(ApplicationAuditEvent).filter(ApplicationAuditEvent.application_id == app_obj.id).delete()
+            db.query(AdditionalInformationRequest).filter(AdditionalInformationRequest.requested_by == user.id).delete()
             db.query(ApplicationAuditEvent).filter(ApplicationAuditEvent.user_id == user.id).delete()
             db.query(Notification).filter(Notification.user_id == user.id).delete()
             db.query(Document).filter(Document.reviewed_by == user.id).update({Document.reviewed_by: None})

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, ForeignKey, Enum, Boolean, Integer
+from sqlalchemy import Column, String, DateTime, ForeignKey, Enum, Boolean, Integer, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -294,4 +294,130 @@ class ComplianceReviewNote(Base):
 
     application = relationship("Application", back_populates="compliance_notes")
     author = relationship("User", foreign_keys=[author_id])
+
+
+# ==============================================================================
+# M08.1 — Policy & Regulatory Management Relational Models
+# ==============================================================================
+
+class PolicyStatus(str, enum.Enum):
+    DRAFT = "DRAFT"
+    PUBLISHED = "PUBLISHED"
+    ACTIVE = "ACTIVE"
+    SUPERSEDED = "SUPERSEDED"
+    ARCHIVED = "ARCHIVED"
+
+
+class RegulatoryAuthority(Base):
+    __tablename__ = "regulatory_authorities"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String, nullable=False)
+    short_name = Column(String, unique=True, index=True, nullable=False)
+    authority_type = Column(String, nullable=False, default="CENTRAL_BANK")
+    jurisdiction = Column(String, nullable=True)
+    website_url = Column(String, nullable=True)
+    description = Column(String, nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class Policy(Base):
+    __tablename__ = "policies"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    policy_code = Column(String, unique=True, index=True, nullable=False)
+    title = Column(String, nullable=False)
+    description = Column(String, nullable=True)
+    category = Column(String, nullable=True)
+    policy_type = Column(String, nullable=True)
+    status = Column(
+        Enum(PolicyStatus, name="policystatus", native_enum=True),
+        default=PolicyStatus.DRAFT,
+        nullable=False,
+        index=True
+    )
+    institution = Column(String, nullable=True)
+    jurisdiction = Column(String, nullable=True)
+    current_version_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("policy_versions.id", ondelete="SET NULL", use_alter=True, name="fk_policies_current_version_id"),
+        nullable=True,
+        index=True
+    )
+    regulatory_authority_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("regulatory_authorities.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True
+    )
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Relationships
+    current_version = relationship("PolicyVersion", foreign_keys=[current_version_id], post_update=True)
+    versions = relationship(
+        "PolicyVersion",
+        foreign_keys="PolicyVersion.policy_id",
+        back_populates="policy",
+        cascade="all, delete-orphan",
+        order_by="PolicyVersion.created_at.desc()"
+    )
+    applicabilities = relationship(
+        "PolicyApplicability",
+        back_populates="policy",
+        cascade="all, delete-orphan"
+    )
+    creator = relationship("User", foreign_keys=[created_by])
+    regulatory_authority = relationship("RegulatoryAuthority", foreign_keys=[regulatory_authority_id], backref="policies")
+
+
+class PolicyVersion(Base):
+    __tablename__ = "policy_versions"
+    __table_args__ = (
+        UniqueConstraint("policy_id", "version_number", name="uq_policy_versions_policy_id_version_number"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    policy_id = Column(UUID(as_uuid=True), ForeignKey("policies.id", ondelete="CASCADE"), nullable=False, index=True)
+    version_number = Column(String, nullable=False, index=True)
+    changelog = Column(String, nullable=True)
+    file_url = Column(String, nullable=True)
+    file_hash = Column(String, nullable=True, index=True)
+    file_size_bytes = Column(Integer, nullable=True)
+    page_count = Column(Integer, nullable=True)
+    effective_from = Column(DateTime(timezone=True), nullable=True, index=True)
+    effective_to = Column(DateTime(timezone=True), nullable=True, index=True)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    published_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Relationships
+    policy = relationship("Policy", foreign_keys=[policy_id], back_populates="versions")
+    creator = relationship("User", foreign_keys=[created_by])
+    publisher = relationship("User", foreign_keys=[published_by])
+
+
+class PolicyApplicability(Base):
+    __tablename__ = "policy_applicability"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    policy_id = Column(UUID(as_uuid=True), ForeignKey("policies.id", ondelete="CASCADE"), nullable=False, index=True)
+    institution = Column(String, nullable=True)
+    jurisdiction = Column(String, nullable=True)
+    loan_type = Column(String, nullable=True)
+    department = Column(String, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Relationships
+    policy = relationship("Policy", foreign_keys=[policy_id], back_populates="applicabilities")
+
 
